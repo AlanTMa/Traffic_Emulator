@@ -5,12 +5,13 @@ import numpy as np
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
 from src.controller.best_response import best_response_mm1
+from src.telemetry.metrics import TelemetryBuffer
 
 class SimulationHandler:
     """
     Processes simulation events and updates the system state.
     """
-    def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray):
+    def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None):
         self.engine = engine
         self.topology = topology
         self.state = state
@@ -21,6 +22,11 @@ class SimulationHandler:
         self.prices = np.zeros(len(self.topology.brokers))
         self.known_prices = np.zeros((len(self.topology.sources), len(self.topology.brokers)))
         self.price_interval = 5.0 # Broadcast prices every 5 seconds
+
+        # Telemetry
+        self.telemetry = telemetry
+        self.iteration = 0
+        self.prev_objective = None
 
         # Schedule first controller tick
         self.engine.schedule(Event(
@@ -180,6 +186,38 @@ class SimulationHandler:
             queue.is_busy = False
 
     def _handle_controller_tick(self, event: Event):
+        # --- Telemetry Recording ---
+        if self.telemetry:
+            # Current broker loads: lambda_j = sum_i x_ij
+            lambda_j = np.sum(self.x_ij, axis=0)
+            mu_j = self.topology.mu_brokers
+
+            # Objective = sum(x_ij / (mu_ij - x_ij)) + sum(lambda_j / (mu_j - lambda_j))
+            diff_links = np.maximum(self.topology.mu_links - self.x_ij, 1e-6)
+            diff_brokers = np.maximum(mu_j - lambda_j, 1e-6)
+
+            obj = np.sum(self.x_ij / diff_links) + np.sum(lambda_j / diff_brokers)
+            max_util = np.max(lambda_j / mu_j)
+
+            rel_change = 0.0
+            if self.prev_objective is not None and self.prev_objective != 0:
+                rel_change = abs(obj - self.prev_objective) / self.prev_objective
+
+            self.telemetry.record(
+                timestamp=self.engine.now,
+                iteration=self.iteration,
+                state_data={
+                    "objective": obj,
+                    "max_util": max_util,
+                    "rel_change": rel_change
+                }
+            )
+            self.prev_objective = obj
+            self.iteration += 1
+
+            # LIVE UPDATE: Save to CSV every tick so the dashboard can read it
+            self.telemetry.save_to_csv("simulation_metrics.csv")
+
         # Schedule price broadcasts for all brokers
         for j in range(len(self.topology.brokers)):
             self.engine.schedule(Event(

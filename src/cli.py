@@ -7,8 +7,10 @@ import signal
 import sys
 import time
 from src.model.config import load_config, topology_from_config
-from src.simulation.state import SystemState
-from src.controller.synchronous import iteration_step
+from src.simulation.engine import SimulationEngine
+from src.simulation.events import Event, EventType
+from src.simulation.queues import SimulationState
+from src.simulation.handler import SimulationHandler
 from src.controller.feasibility import transportation_feasibility
 from src.telemetry.metrics import TelemetryBuffer
 
@@ -17,7 +19,7 @@ RUNNING = True
 
 def signal_handler(sig, frame):
     global RUNNING
-    print("\n[SIGINT] Shutdown signal received. Flushing metrics and exiting...")
+    print("\n[SIGINT] Shutdown signal received. Stopping simulation...")
     RUNNING = False
 
 def run_simulation(config_path: str):
@@ -29,66 +31,52 @@ def run_simulation(config_path: str):
     topo = topology_from_config(config)
 
     # 2. Initialization
-    L0 = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
-    loads = L0.sum(axis=0)
-    p0 = topo.mu_brokers / (topo.mu_brokers - loads)**2
-    state = SystemState(lambda_ij=L0, prices=p0)
+    x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
 
-    # 3. Algorithm Parameters
-    algo = config['algorithm']
-    eta = float(algo['eta'])
-    gamma = float(algo['gamma'])
-    eps = float(algo['eps'])
-    tol = float(algo['convergence_tol'])
+    # Create the event-driven simulation components
+    engine = SimulationEngine()
+    state = SimulationState(len(topo.sources), len(topo.brokers), topo.mu_links, topo.mu_brokers)
 
     # Telemetry
     telemetry = TelemetryBuffer()
+    handler = SimulationHandler(engine, topo, state, x_ij, telemetry=telemetry)
 
-    print(f"Starting continuous simulation from config: {config_path}")
+    # Initial events: first arrivals for all sources
+    for i in range(len(topo.sources)):
+        engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
+
+    # 3. Simulation Parameters
+    sim_cfg = config.get('simulation', {})
+    # Default to a very large duration for "infinite" runs
+    duration = float(sim_cfg.get('duration', 1e12))
+
+    print(f"Starting event-driven simulation from config: {config_path}")
     print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers")
-    print("Press Ctrl+C to stop.")
+    print(f"Duration: {duration}s. Press Ctrl+C to stop.")
 
-    # 4. Continuous Loop
-    iteration = 0
-    start_time = time.time()
+    # 4. Execution
+    def wrapper(event):
+        if not RUNNING:
+            return
+        handler.handle_event(event)
 
-    while RUNNING:
-        # Controller Tick
-        state, s_t, rel_change = iteration_step(state, topo, eta, gamma, eps)
-        iteration += 1
+    try:
+        engine.run(duration=duration, handler=wrapper)
+    except KeyboardInterrupt:
+        pass
 
-        # Calculate objective for telemetry
-        l_mat = state.lambda_ij
-        loads_final = l_mat.sum(axis=0)
-        obj = np.sum(l_mat / (topo.mu_links - l_mat)) + np.sum(loads_final / (topo.mu_brokers - loads_final))
+    # 5. Final Results
+    print("\n=== Simulation Complete ===")
+    latencies = []
+    for req in state.requests.values():
+        if "broker_complete" in req:
+            latencies.append(req["broker_complete"] - req["arrival"])
 
-        # Record telemetry
-        telemetry.record(
-            timestamp=time.time() - start_time,
-            iteration=iteration,
-            state_data={
-                "objective": obj,
-                "rel_change": rel_change,
-                "max_util": np.max(loads_final / topo.mu_brokers),
-                "s_t": s_t
-            }
-        )
-
-        if iteration % 10 == 0:
-            print(f"Iteration {iteration}: Obj={obj:.6f}, rel_change={rel_change:.3e}")
-
-        if iteration >= 100:
-            print("Test limit reached (100 iterations). Shutting down.")
-            break
-
-        # In a real emulator, we would sleep here to match the window duration
-        # time.sleep(config['simulation'].get('window', 1))
-
-    # 5. Shutdown and Save
-    print("\n=== Final Results ===")
-    print(f"Final Objective: {obj:.6f}")
-    telemetry.save_to_csv("simulation_metrics.csv")
-    print("Metrics saved to simulation_metrics.csv")
+    if latencies:
+        print(f"Processed {len(latencies)} requests.")
+        print(f"Mean End-to-End Latency: {np.mean(latencies):.4f}s")
+    else:
+        print("No requests completed during the simulation.")
 
 def main():
     parser = argparse.ArgumentParser(description="Traffic Allocation Emulator")
