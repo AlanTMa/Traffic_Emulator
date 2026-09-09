@@ -1,0 +1,17 @@
+# Ignore everything
+*
+# Except project files
+!src/
+!tests/
+!scripts/
+!Dockerfile
+!docker-compose.yml
+!requirements.txt
+!WiOpt26JNSC_Extended.ipynb
+!.gitignore
+
+# Ignore python cache
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
