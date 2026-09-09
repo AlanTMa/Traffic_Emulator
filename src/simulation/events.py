@@ -12,10 +12,11 @@ class EventType(Enum):
     BROKER_ARRIVAL = auto()
     BROKER_SERVICE_START = auto()
     BROKER_SERVICE_COMPLETE = auto()
-    CONTROLLER_UPDATE = auto()
+    # Asynchronous Controller Events
     PRICE_BROADCAST = auto()
     PRICE_RECEIVED = auto()
     ROUTING_UPDATE = auto()
+    CONTROLLER_TICK = auto()
 
 @dataclass(order=True)
 class Event:
