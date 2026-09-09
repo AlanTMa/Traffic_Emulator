@@ -1,17 +1,39 @@
-# Ignore everything
-*
-# Except project files
-!src/
-!tests/
-!scripts/
-!Dockerfile
-!docker-compose.yml
-!requirements.txt
-!WiOpt26JNSC_Extended.ipynb
-!.gitignore
-
-# Ignore python cache
-**/__pycache__/
+# Python
+__pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-set-up/
+share/python-wheels/
 .pytest_cache/
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific
+simulation_metrics.csv
+dashboard_*.png
