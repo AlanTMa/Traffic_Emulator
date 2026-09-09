@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  emulator:
+    build: .
+    volumes:
+      - .:/app
+    # Keep the container running to allow exec access if needed
+    tty: true
+    stdin_open: true
+    command: python src/cli.py run --config config/paper_5x3.yaml
