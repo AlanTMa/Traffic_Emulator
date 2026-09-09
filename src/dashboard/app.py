@@ -1,57 +1,78 @@
-"""
-Real-time dashboard for the traffic allocation emulator.
-(Mock implementation: In a full version, this would be a Streamlit or Dash app
-reading from the telemetry CSV or a live socket).
-"""
+import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.express as px
 import os
+import time
 
-def generate_dashboard_report(metrics_path: str = "simulation_metrics.csv"):
-    """
-    Generate static plots from the telemetry CSV to simulate a dashboard.
-    """
-    if not os.path.exists(metrics_path):
-        print(f"Metrics file {metrics_path} not found.")
-        return
+st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
 
-    df = pd.read_csv(metrics_path)
+st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
+st.markdown("This dashboard reads `simulation_metrics.csv` in real-time to visualize system stability.")
 
-    # 1. Objective Trajectory
-    plt.figure(figsize=(10, 5))
-    plt.plot(df['iteration'], df['objective'], marker='o', markersize=2, label='Objective')
-    plt.xlabel('Iteration')
-    plt.ylabel('Objective Value')
-    plt.title('System Objective Convergence')
-    plt.grid(True, linestyle=':')
-    plt.legend()
-    plt.savefig('dashboard_objective.png')
-    plt.close()
+# Configuration
+METRICS_FILE = "simulation_metrics.csv"
+REFRESH_RATE = 2 # seconds
 
-    # 2. Relative Change (Log Scale)
-    plt.figure(figsize=(10, 5))
-    plt.plot(df['iteration'], df['rel_change'], marker='o', markersize=2, color='orange', label='Rel Change')
-    plt.yscale('log')
-    plt.xlabel('Iteration')
-    plt.ylabel('Relative Change')
-    plt.title('Convergence Rate')
-    plt.grid(True, linestyle=':')
-    plt.legend()
-    plt.savefig('dashboard_convergence.png')
-    plt.close()
+# Auto-refresh logic
+if "last_update" not in st.session_state:
+    st.session_state.last_update = 0
 
-    # 3. Max Utilization
-    plt.figure(figsize=(10, 5))
-    plt.plot(df['iteration'], df['max_util'], marker='o', markersize=2, color='green', label='Max Util')
-    plt.xlabel('Iteration')
-    plt.ylabel('Utilization')
-    plt.title('Max Broker Utilization')
-    plt.grid(True, linestyle=':')
-    plt.legend()
-    plt.savefig('dashboard_util.png')
-    plt.close()
+def load_data():
+    if not os.path.exists(METRICS_FILE):
+        return None
+    try:
+        return pd.read_csv(METRICS_FILE)
+    except Exception as e:
+        st.error(f"Error reading metrics file: {e}")
+        return None
 
-    print("Dashboard report generated: dashboard_objective.png, dashboard_convergence.png, dashboard_util.png")
+# Main layout
+placeholder = st.empty()
 
-if __name__ == "__main__":
-    generate_dashboard_report()
+while True:
+    df = load_data()
+
+    with placeholder.container():
+        if df is not None and not df.empty:
+            # Top Row: KPIs
+            col1, col2, col3 = st.columns(3)
+
+            current_obj = df['objective'].iloc[-1]
+            prev_obj = df['objective'].iloc[-2] if len(df) > 1 else current_obj
+            rel_change = abs(current_obj - prev_obj) / (prev_obj if prev_obj != 0 else 1)
+            max_util = df['max_util'].iloc[-1]
+
+            col1.metric("Current Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
+            col2.metric("Max Utilization", f"{max_util:.2%}")
+            col3.metric("Rel. Change", f"{rel_change:.2%}")
+
+            # Middle Row: Charts
+            chart_col1, chart_col2 = st.columns(2)
+
+            with chart_col1:
+                st.subheader("Objective Convergence")
+                fig_obj = px.line(df, x='iteration', y='objective',
+                                 labels={'iteration': 'Iteration', 'objective': 'Total Delay'},
+                                 title="System Objective vs Iteration")
+                st.plotly_chart(fig_obj, use_container_width=True)
+
+            with chart_col2:
+                st.subheader("Convergence Rate")
+                fig_conv = px.line(df, x='iteration', y='rel_change',
+                                 labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
+                                 title="Relative Change (Convergence Speed)")
+                st.plotly_chart(fig_conv, use_container_width=True)
+
+            # Bottom Row: Utilization
+            st.subheader("Max Broker Utilization")
+            fig_util = px.line(df, x='iteration', y='max_util',
+                             labels={'iteration': 'Iteration', 'max_util': 'Utilization'},
+                             title="Max Utilization over Time")
+            st.plotly_chart(fig_util, use_container_width=True)
+
+        else:
+            st.warning("Waiting for simulation data... Please run `python src/cli.py run --config <config>.yaml` in another terminal.")
+            if df is None:
+                st.info("Simulation metrics file not found. Once the simulation starts, it will appear here.")
+
+    time.sleep(REFRESH_RATE)
