@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.controller.diagnostics import DEFAULT_TOLERANCES
 from src.model.config import load_config
 from src.model.generate import generate_topology_config
+from src.telemetry.metrics import JsonlTail
 
 st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
 
@@ -28,6 +29,7 @@ METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema
 RUN_CONFIG = RUN_DIR / "dashboard_run.yaml"
 RUN_LOG = RUN_DIR / "dashboard_run.log"
 REFRESH_RATE = 2 # seconds
+MAX_ROWS = 3000  # most recent iterations kept for plotting
 
 # --- Simulation process management ---
 
@@ -120,14 +122,15 @@ VIEWS = ["Overview", "Brokers", "Routing", "Optimality", "Queues & latency"]
 view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
 
 def load_data():
-    if not METRICS_FILE.exists():
+    # Incremental: each refresh parses only the rows appended since the last one
+    if "metrics_tail" not in st.session_state:
+        st.session_state.metrics_tail = JsonlTail(METRICS_FILE, max_rows=MAX_ROWS)
+    tail = st.session_state.metrics_tail
+    rows = tail.read()
+    if not rows:
         return None
-    try:
-        df = pd.read_json(METRICS_FILE, lines=True)
-    except ValueError:
-        return None  # empty file, or a line still being written
-    if df.empty:
-        return df
+    df = pd.DataFrame(rows)
+    df.attrs["total_rows"] = tail.total_rows
     # Scalar views of the per-broker records for the summary charts
     df["timestamp"] = df["sim_time"]
     df["rel_change"] = df[["route_rel", "price_rel"]].max(axis=1)
@@ -407,6 +410,9 @@ def render_dashboard():
     render_status(df)
 
     if df is not None and not df.empty:
+        if df.attrs["total_rows"] > len(df):
+            st.caption(f"Showing the latest {len(df):,} of {df.attrs['total_rows']:,} iterations; "
+                       f"the full log is {METRICS_FILE.relative_to(PROJECT_ROOT)}.")
         RENDERERS[view](df)
     elif is_running(holder):
         st.info("Simulation started; the first point appears after the first window.")

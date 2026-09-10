@@ -57,6 +57,7 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
 
     if mode == 'static_algorithm1':
         run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time)
+        telemetry.close()
         return
 
     # Create the event-driven simulation components
@@ -91,6 +92,7 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
         engine.run(duration=duration, handler=wrapper, real_time=real_time)
     except KeyboardInterrupt:
         pass
+    telemetry.close()
 
     # 5. Final Results
     print("\n=== Simulation Complete ===")

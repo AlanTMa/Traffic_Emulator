@@ -18,7 +18,7 @@ def test_windowed_records_queue_and_latency_metrics():
         engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
     engine.run(duration=100.0, handler=handler.handle_event)
 
-    rows = telemetry.history
+    rows = list(telemetry.history)
     assert len(rows) == 20
     for r in rows:
         assert np.array(r["queue_access_ij"]).shape == (2, 2)

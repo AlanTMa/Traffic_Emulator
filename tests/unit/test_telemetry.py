@@ -33,6 +33,7 @@ def test_records_are_appended_as_json_lines(tmp_path):
     buf = TelemetryBuffer(path=path)
     for k in range(3):
         buf.record(controller_snapshot(TOPO, LAM, np.zeros(3), iteration=k, sim_time=k, controller_mode="windowed_stochastic"))
+    buf.close()  # writes are flushed periodically and on close
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [row["iteration"] for row in rows] == [0, 1, 2]
     assert rows[0]["s_j"] is None

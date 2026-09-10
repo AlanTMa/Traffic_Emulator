@@ -1,34 +1,97 @@
 """
-Telemetry buffer for recording system metrics over time.
+Telemetry storage: append-only JSON Lines on disk, bounded history in memory.
 """
 import json
-from dataclasses import dataclass, field
+import time
+from collections import deque
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
-@dataclass
 class TelemetryBuffer:
     """
-    Stores telemetry records (see src/telemetry/schema.py). If `path` is set,
-    every record is also appended to that JSON Lines file as it arrives.
-    """
-    path: Optional[Path] = None
-    history: List[Dict[str, Any]] = field(default_factory=list)
+    Records telemetry dicts (see src/telemetry/schema.py).
 
-    def __post_init__(self):
+    - In memory only the most recent `max_history` records are kept, so an
+      open-ended run does not grow without bound.
+    - If `path` is given, every record is appended to that JSON Lines file,
+      which is the complete persistent log. Writes go through one open
+      handle and are flushed at most every `flush_interval` seconds (and on
+      close), so readers see new rows within about that interval.
+    """
+    def __init__(self, path: Optional[Path] = None, max_history: int = 2000, flush_interval: float = 1.0):
+        self.history = deque(maxlen=max_history)
+        self.path = Path(path) if path is not None else None
+        self.flush_interval = flush_interval
+        self.records_written = 0
+        self._file = None
+        self._last_flush = 0.0
         if self.path is not None:
-            self.path = Path(self.path)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text("")  # a new run starts a new file
+            self._file = open(self.path, "w", encoding="utf-8")  # a new run starts a new file
 
     def record(self, record: Dict[str, Any]):
         """Add one record (a JSON-serializable dict)."""
         self.history.append(record)
-        if self.path is not None:
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
+        if self._file is not None:
+            self._file.write(json.dumps(record) + "\n")
+            self.records_written += 1
+            now = time.monotonic()
+            if now - self._last_flush >= self.flush_interval:
+                self._file.flush()
+                self._last_flush = now
+
+    def close(self):
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    def __del__(self):
+        self.close()
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert history to a pandas DataFrame for analysis."""
-        return pd.DataFrame(self.history)
+        """The in-memory (most recent) records as a DataFrame."""
+        return pd.DataFrame(list(self.history))
+
+class JsonlTail:
+    """
+    Incremental reader for a growing JSON Lines file: each read() parses only
+    the bytes appended since the previous call and keeps the last `max_rows`
+    records. A replaced or truncated file (a new run) resets the reader.
+    """
+    def __init__(self, path: Path, max_rows: int = 3000):
+        self.path = Path(path)
+        self.rows = deque(maxlen=max_rows)
+        self.total_rows = 0
+        self._offset = 0
+        self._head = b""
+
+    def _reset(self):
+        self.rows.clear()
+        self.total_rows = 0
+        self._offset = 0
+        self._head = b""
+
+    def read(self) -> List[Dict[str, Any]]:
+        if not self.path.exists():
+            self._reset()
+            return []
+        with open(self.path, "rb") as f:
+            head = f.read(256)
+            size = f.seek(0, 2)
+            # A different first record or a shorter file means a new run
+            if size < self._offset or (self._head and head[:len(self._head)] != self._head):
+                self._reset()
+            if not self._head:
+                self._head = head
+            f.seek(self._offset)
+            chunk = f.read()
+        # Only consume complete lines; a partially written last line waits
+        end = chunk.rfind(b"\n") + 1
+        for line in chunk[:end].splitlines():
+            if line.strip():
+                self.rows.append(json.loads(line))
+                self.total_rows += 1
+        self._offset += end
+        return list(self.rows)
