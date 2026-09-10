@@ -19,22 +19,25 @@ def update_prices(current_prices: np.ndarray, loads: np.ndarray, mu_brokers: np.
     p_hat = mm1_marginal_cost_vectorized(loads, mu_brokers, eps)
     return (1.0 - gamma) * current_prices + gamma * p_hat
 
-def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray, eps: float = 1e-12) -> float:
+def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
+                      eta: float, eps: float = 1e-12) -> float:
     """
-    Calculate the common safe step s_t to ensure broker feasibility.
-    s_t = min(1, min_j (mu_j - Lambda_j) / Delta_Lambda_j) for Delta_Lambda_j > 0.
-    """
-    direction = lambda_br - lambda_ij
-    load_direction = direction.sum(axis=0)
+    Common safe step s_t of Algorithm 1 (capacity margin eps).
 
-    safe_fraction = 1.0
+    With Delta_j = sum_i (lambda_br_ij - lambda_ij), for every broker with Delta_j > 0:
+        s_j = min(1, (mu_j - eps - Lambda_j) / (eta * Delta_j))
+    and s_j = 1 otherwise; s_t = min_j s_j. The routing update then moves by
+    eta * s_t, so Lambda_j + eta * s_t * Delta_j <= mu_j - eps for every j.
+    """
+    load_direction = (lambda_br - lambda_ij).sum(axis=0)
+
+    s_t = 1.0
     for j in range(len(mu_brokers)):
         if load_direction[j] > 0:
-            # Capacity headroom / proposed increase
-            fraction = (mu_brokers[j] - eps - loads[j]) / load_direction[j]
-            safe_fraction = min(safe_fraction, fraction)
+            s_j = (mu_brokers[j] - eps - loads[j]) / (eta * load_direction[j])
+            s_t = min(s_t, s_j)
 
-    return max(0.0, min(1.0, safe_fraction))
+    return max(0.0, s_t)
 
 def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12):
     """
@@ -59,7 +62,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
         )
 
     # 4. Calculate safe step
-    s_t = compute_safe_step(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eps)
+    s_t = compute_safe_step(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, eps)
 
     # 5. Update routing
     step = eta * s_t
