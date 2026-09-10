@@ -1,0 +1,19 @@
+# Simple 1x1 Configuration for Validation
+simulation:
+  duration: 1e12
+  warmup: 10.0
+  mode: "asynchronous"
+
+algorithm:
+  gamma: 0.5
+  eta: 0.25
+  eps: 1e-8
+  convergence_tol: 1e-10
+
+topology:
+  sources:
+    - {id: "P0", rate: 0.5}
+  brokers:
+    - {id: "SN1", capacity: 1.0}
+  access_capacities:
+    "P0->SN1": 1.0

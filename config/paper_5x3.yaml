@@ -1,0 +1,40 @@
+# Baseline 5x3 Experiment from Paper
+simulation:
+  duration: 300
+  window: 5
+  warmup: 4
+  mode: "synchronous"
+
+algorithm:
+  gamma: 0.5
+  eta: 0.25
+  eps: 1e-8
+  convergence_tol: 1e-10
+
+topology:
+  sources:
+    - {id: "P0", rate: 0.156}
+    - {id: "P1", rate: 0.098}
+    - {id: "P2", rate: 30.059}
+    - {id: "P3", rate: 30.010}
+    - {id: "P4", rate: 0.107}
+  brokers:
+    - {id: "SN1", capacity: 160.754}
+    - {id: "SN2", capacity: 106.505}
+    - {id: "SN3", capacity: 196.563}
+  access_capacities:
+    "P0->SN1": 47.491
+    "P0->SN2": 54.640
+    "P0->SN3": 43.120
+    "P1->SN1": 41.162
+    "P1->SN2": 52.022
+    "P1->SN3": 40.412
+    "P2->SN1": 56.649
+    "P2->SN2": 43.636
+    "P2->SN3": 46.085
+    "P3->SN1": 48.639
+    "P3->SN2": 52.237
+    "P3->SN3": 45.843
+    "P4->SN1": 49.121
+    "P4->SN2": 43.993
+    "P4->SN3": 51.848
