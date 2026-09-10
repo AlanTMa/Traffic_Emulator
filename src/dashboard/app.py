@@ -126,7 +126,10 @@ if RUN_CONFIG.exists() and holder["label"]:
 VIEWS = ["Overview", "Brokers", "Routing", "Optimality", "Queues & latency"]
 # Read inside the fragment from session state: fragment reruns must use the
 # current selection, not a value captured by an earlier full run.
-st.segmented_control("View", VIEWS, default="Overview", key="view")
+view_col, scale_col = st.columns([4, 1])
+view_col.segmented_control("View", VIEWS, default="Overview", key="view")
+scale_col.segmented_control("Y scale", ["Log", "Linear"], default="Log", key="yscale",
+                            help="For relative change, marginal costs and residuals. Log: one label per power of ten. Linear: evenly spaced values that re-tick when you zoom.")
 
 def load_data():
     # Incremental: each refresh parses only the rows appended since the last one
@@ -159,22 +162,23 @@ def node_names(df):
 
 def log_axis(fig, values):
     """
-    Readable log y-axis. Plotly's default labels intermediate ticks as bare
-    "2" and "5" (and uses SI prefixes like 1μ), so a decade axis reads
-    1, 5, 2, 0.1, 5, 2, ... Label only powers of ten when the data span two
-    or more decades (unlabeled minor gridlines in between); otherwise keep
-    automatic ticks but print full values.
+    Y-axis for charts whose values span orders of magnitude.
+
+    Linear (selector): ordinary evenly spaced ticks that re-tick when zooming.
+    Log: one label per power of ten (or every k-th power, at most ~7 labels),
+    so every gap is the same factor. Plotly's default log ticks mix in bare
+    "2" and "5" labels (1, 5, 2, 0.1, 5, 2, ...) and are not used. Data
+    spanning less than one decade is drawn linearly, where it reads better.
     """
     v = np.asarray(values, dtype=float)
     v = v[np.isfinite(v) & (v > 0)]
     decades = np.log10(v.max() / v.min()) if v.size else 0.0
-    if decades >= 2:
-        # At most ~7 labels; minor gridlines only while they stay sparse
-        step = int(np.ceil(decades / 7))
-        fig.update_yaxes(dtick=step, exponentformat="power", showexponent="all",
-                         minor=dict(showgrid=bool(decades <= 6), ticks=""))
+    if st.session_state.get("yscale", "Log") == "Linear" or decades < 1:
+        fig.update_yaxes(type="linear", tickformat=".3~g")
     else:
-        fig.update_yaxes(tickformat=".2~g")
+        step = int(np.ceil(decades / 7))
+        fig.update_yaxes(type="log", dtick=step, exponentformat="power", showexponent="all",
+                         minor=dict(showgrid=bool(decades <= 6), ticks=""))
     return fig
 
 def per_broker(df, column, brokers):
