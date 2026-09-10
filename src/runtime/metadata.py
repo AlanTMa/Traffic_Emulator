@@ -29,7 +29,7 @@ def git_revision() -> dict:
         return {"sha": None, "dirty": None}
 
 def write_run_metadata(output_dir: Path, config: dict, topology, *, seed: int, controller_mode: str,
-                       real_time: bool, parameters: dict, config_path: str = None) -> dict:
+                       real_time: bool, parameters: dict, config_path: str = None, extra: dict = None) -> dict:
     """Write output_dir/run.json and return its contents."""
     meta = {
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -49,6 +49,8 @@ def write_run_metadata(output_dir: Path, config: dict, topology, *, seed: int, c
         "parameters": parameters,   # eta, gamma, beta, delta_s, eps, window, warmup as used
         "config": config,
         "versions": {"python": sys.version.split()[0], "numpy": np.__version__, "platform": platform.platform()},
+        "execution_backend": "in_process",
+        **(extra or {}),
     }
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
