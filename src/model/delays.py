@@ -3,7 +3,7 @@ Delay functions for the M/M/1 queueing model.
 """
 import numpy as np
 
-def mm1_delay(x: float, mu: float, eps: float = 1e-8) -> float:
+def mm1_delay(x: float, mu: float, eps: float = 1e-12) -> float:
     """
     Calculate the M/M/1 delay: D(x) = 1 / (mu - x)
 
