@@ -240,7 +240,8 @@ class ControllerService:
                            parameters=self.p, config_path=self.config_path,
                            extra={"execution_backend": "distributed", "notes": self.settings["notes"],
                                   "processes": processes,
-                                  "actor_seeds": "numpy default_rng([root_seed, role(1=source, 2=broker), index])"})
+                                  "actor_seeds": "[root_seed, role (1=source, 2=broker), index]; a source spawns "
+                                                 "separate arrival, routing and per-link service streams from it"})
 
     # ---------------------------------------------------------------- lifecycle
     async def run(self):

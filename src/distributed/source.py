@@ -42,12 +42,12 @@ class SourceWorker:
     def _route(self) -> int:
         """Broker for a new unit: probabilities lambda_ij / sum_j lambda_ij of the current plan."""
         probs = self.x_row / self.x_row.sum() if self.x_row.sum() > 0 else self.mask / self.mask.sum()
-        return int(self.rng.choice(len(probs), p=probs))
+        return int(self.rng_route.choice(len(probs), p=probs))
 
     async def _generate(self, t0: float):
         next_t = t0
         while not self.stop.is_set():
-            next_t += self.rng.exponential(1.0 / self.rate)
+            next_t += self.rng_arrivals.exponential(1.0 / self.rate)
             delay = next_t - time.time()
             if delay > 0:
                 await asyncio.sleep(delay)
@@ -59,7 +59,7 @@ class SourceWorker:
 
     async def _serve_access(self, j: int):
         """Access link (i, j): FIFO, Exp(mu_ij) service on the link's virtual clock."""
-        queue, wake, writer = self.queues[j], self.wakeups[j], self.writers[j]
+        queue, wake, writer, rng = self.queues[j], self.wakeups[j], self.writers[j], self.rng_service[j]
         free_at = 0.0
         while not self.stop.is_set():
             if not queue:
@@ -69,7 +69,7 @@ class SourceWorker:
             unit = queue.popleft()
             self.busy[j] = True
             start = max(unit["g"], free_at)
-            free_at = start + self.rng.exponential(1.0 / self.mu_row[j])
+            free_at = start + rng.exponential(1.0 / self.mu_row[j])
             delay = free_at - time.time()
             if delay > 0:
                 await asyncio.sleep(delay)
@@ -99,8 +99,10 @@ class SourceWorker:
         self.mu_row = np.array(a["mu_row"], dtype=float)
         self.mask = self.mu_row > 0
         self.x_row = np.array(a["lambda_row"], dtype=float)
-        self.rng = np.random.default_rng(a["seed"])
         m = len(self.mu_row)
+        # Separate streams (arrivals, routing, each access link) so draws do not depend on task interleaving
+        streams = [np.random.default_rng(s) for s in np.random.SeedSequence(a["seed"]).spawn(2 + m)]
+        self.rng_arrivals, self.rng_route, self.rng_service = streams[0], streams[1], streams[2:]
         self.queues = [deque() for _ in range(m)]
         self.wakeups = [asyncio.Event() for _ in range(m)]
         self.busy = [False] * m
