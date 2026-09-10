@@ -1,11 +1,75 @@
-version: '3.8'
+# Traffic Emulator services.
+#
+# Distributed emulator (normally started by `python -m src.cli up` / `traffic-emulator up`,
+# which writes the resolved config and sets TE_CONFIG / TE_OUTPUT_DIR):
+#
+#   docker compose --profile distributed up --build --scale source=5 --scale broker=3
+#
+# Every source and broker is its own container; N and M are the replica
+# counts (they must match the topology in TE_CONFIG). Workers register with
+# the controller over TCP and receive their logical id and parameters.
+#
+# Single-process reference emulator:
+#
+#   docker compose --profile reference up --build
+
+x-app: &app
+  build: .
+  image: traffic-emulator:latest
+  volumes:
+    - ./runs:/app/runs            # telemetry and run metadata (written by the controller only)
+    - ./config:/app/config:ro
+  environment:
+    PYTHONUNBUFFERED: "1"
+  stop_grace_period: 15s
 
 services:
+  controller:
+    <<: *app
+    profiles: [distributed]
+    command: ["python", "-m", "src.distributed.controller",
+              "--config", "${TE_CONFIG:-config/paper_5x3.yaml}",
+              "--output-dir", "${TE_OUTPUT_DIR:-runs/latest}",
+              "--host", "0.0.0.0", "--port", "7000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 7000), 2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  broker:
+    <<: *app
+    profiles: [distributed]
+    # Replicated with --scale broker=M. Each replica advertises its container IP
+    # for the source -> broker data plane (port 7100 inside the container).
+    command: ["python", "-m", "src.distributed.broker", "--controller", "controller:7000", "--port", "7100"]
+    depends_on:
+      controller:
+        condition: service_healthy
+
+  source:
+    <<: *app
+    profiles: [distributed]
+    # Replicated with --scale source=N.
+    command: ["python", "-m", "src.distributed.source", "--controller", "controller:7000"]
+    depends_on:
+      controller:
+        condition: service_healthy
+
+  dashboard:
+    <<: *app
+    profiles: [distributed, reference]
+    command: ["python", "-m", "streamlit", "run", "src/dashboard/app.py",
+              "--server.address", "0.0.0.0", "--server.port", "8501", "--server.headless", "true"]
+    ports:
+      - "8501:8501"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TRAFFIC_EMULATOR_OUTPUT_DIR: /app/${TE_OUTPUT_DIR:-runs/latest}
+      TRAFFIC_EMULATOR_OBSERVER: "1"      # read-only: watches the run, never controls it
+
   emulator:
-    build: .
-    volumes:
-      - .:/app
-    # Keep the container running to allow exec access if needed
-    tty: true
-    stdin_open: true
-    command: python src/cli.py run --config config/paper_5x3.yaml
+    <<: *app
+    profiles: [reference]
+    command: ["python", "-m", "src.cli", "run", "--config", "${TE_CONFIG:-config/paper_5x3.yaml}",
+              "--output-dir", "${TE_OUTPUT_DIR:-runs/latest}"]
