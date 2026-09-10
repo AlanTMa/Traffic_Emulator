@@ -22,8 +22,7 @@ def test_static_experiment_high_load():
 
 def test_event_experiment_smoke():
     topo = base_topology(0.5 * max_multiplier())
-    x0 = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
-    ev = event_experiment(topo, x0, frozen=False, duration=60.0, warmup_time=20.0, seed=0)
+    ev = event_experiment(topo, "windowed_stochastic", duration=60.0, warmup_time=20.0, seed=0)
     assert ev["completed"] > 1000
     assert ev["latency_p50"] <= ev["latency_p95"] <= ev["latency_p99"]
     assert len(ev["util_measured_j"]) == 3
