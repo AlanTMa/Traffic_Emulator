@@ -2,6 +2,7 @@
 Command-line interface for the traffic allocation emulator.
 """
 import argparse
+import itertools
 import numpy as np
 import signal
 import sys
@@ -36,15 +37,18 @@ def run_simulation(config_path: str, real_time: bool = True):
     alg_cfg = config.get('algorithm', {})
     sim_cfg = config.get('simulation', {})
     window = float(sim_cfg.get('window', 5.0))
-    # Default to a very large duration for "infinite" runs
-    duration = float(sim_cfg.get('duration', 1e12))
+    # No duration: run until stopped (Ctrl+C, or Stop in the dashboard)
+    duration = float(sim_cfg.get('duration', 'inf'))
 
     # 2. Initialization
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
     telemetry = TelemetryBuffer()
 
     print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers")
-    print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.")
+    if np.isinf(duration):
+        print(f"Running until stopped, controller every {window}s. Press Ctrl+C to stop.", flush=True)
+    else:
+        print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.", flush=True)
 
     if sim_cfg.get('mode') == 'static':
         run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time)
@@ -52,7 +56,8 @@ def run_simulation(config_path: str, real_time: bool = True):
 
     # Create the event-driven simulation components
     engine = SimulationEngine()
-    state = SimulationState(len(topo.sources), len(topo.brokers), topo.mu_links, topo.mu_brokers)
+    state = SimulationState(len(topo.sources), len(topo.brokers), topo.mu_links, topo.mu_brokers,
+                            keep_requests=False)
     handler = SimulationHandler(
         engine, topo, state, x_ij, telemetry=telemetry,
         eta=float(alg_cfg.get('eta', 0.35)),
@@ -84,14 +89,9 @@ def run_simulation(config_path: str, real_time: bool = True):
 
     # 5. Final Results
     print("\n=== Simulation Complete ===")
-    latencies = []
-    for req in state.requests.values():
-        if "broker_complete" in req:
-            latencies.append(req["broker_complete"] - req["arrival"])
-
-    if latencies:
-        print(f"Processed {len(latencies)} requests.")
-        print(f"Mean End-to-End Latency: {np.mean(latencies):.4f}s")
+    if state.completed:
+        print(f"Processed {state.completed} requests.")
+        print(f"Mean End-to-End Latency: {state.latency_sum / state.completed:.4f}s")
     else:
         print("No requests completed during the simulation.")
 
@@ -107,7 +107,10 @@ def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
     loads = x_ij.sum(axis=0)
     state = SystemState(lambda_ij=x_ij, prices=mm1_marginal_cost_vectorized(loads, topo.mu_brokers, eps))
     wall_start = time.perf_counter()
-    for k in range(1, round(duration / window) + 1):
+    n_iter = None if np.isinf(duration) else round(duration / window)
+    for k in itertools.count(1):
+        if n_iter is not None and k > n_iter:
+            break
         if not RUNNING:
             break
         if real_time:

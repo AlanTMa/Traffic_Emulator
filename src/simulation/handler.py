@@ -184,7 +184,12 @@ class SimulationHandler:
 
     def _handle_broker_complete(self, event: Event):
         # Record completion
-        self.state.requests[event.request_id]["broker_complete"] = self.engine.now
+        req = self.state.requests[event.request_id]
+        req["broker_complete"] = self.engine.now
+        self.state.completed += 1
+        self.state.latency_sum += self.engine.now - req["arrival"]
+        if not self.state.keep_requests:
+            del self.state.requests[event.request_id]
 
         # Schedule next request in queue
         queue = self.state.broker_queues[event.broker_id]

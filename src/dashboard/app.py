@@ -1,19 +1,120 @@
-import streamlit as st
+import atexit
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
-import os
+import streamlit as st
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from src.model.config import load_config
+from src.model.generate import generate_topology_config
 
 st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
 
 st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
-st.markdown("This dashboard reads `simulation_metrics.csv` in real-time to visualize system stability.")
+st.markdown("Set up a topology in the sidebar and launch a simulation; charts update live from `simulation_metrics.csv`.")
 
 # Configuration
-METRICS_FILE = "simulation_metrics.csv"
+METRICS_FILE = PROJECT_ROOT / "simulation_metrics.csv"  # written by the simulation (cwd = project root)
+RUN_DIR = PROJECT_ROOT / "runs"
+RUN_CONFIG = RUN_DIR / "dashboard_run.yaml"
+RUN_LOG = RUN_DIR / "dashboard_run.log"
 REFRESH_RATE = 2 # seconds
 
+# --- Simulation process management ---
+
+@st.cache_resource
+def sim_process() -> dict:
+    """The dashboard's simulation subprocess, shared across reruns and browser tabs."""
+    holder = {"proc": None, "log": None, "label": ""}
+    atexit.register(stop_simulation, holder)
+    return holder
+
+def is_running(holder: dict) -> bool:
+    return holder["proc"] is not None and holder["proc"].poll() is None
+
+def stop_simulation(holder: dict):
+    if is_running(holder):
+        holder["proc"].terminate()
+        holder["proc"].wait(timeout=10)
+    if holder["log"] is not None:
+        holder["log"].close()
+        holder["log"] = None
+
+def launch_simulation(holder: dict, config: dict, label: str):
+    stop_simulation(holder)
+    RUN_DIR.mkdir(exist_ok=True)
+    RUN_CONFIG.write_text(yaml.safe_dump(config, sort_keys=False))
+    METRICS_FILE.unlink(missing_ok=True)  # start the charts from scratch
+    holder["log"] = open(RUN_LOG, "w")
+    holder["proc"] = subprocess.Popen(
+        [sys.executable, "-u", "-m", "src.cli", "run", "--config", str(RUN_CONFIG)],
+        cwd=PROJECT_ROOT, stdout=holder["log"], stderr=subprocess.STDOUT,
+    )
+    holder["label"] = label
+
+holder = sim_process()
+
+# --- Sidebar: setup and launch ---
+
+with st.sidebar:
+    st.header("Simulation setup")
+    topology_source = st.radio("Topology", ["Generate", "Config file"], horizontal=True)
+
+    if topology_source == "Generate":
+        n_sources = st.slider("Sources (producers)", 1, 20, 5)
+        n_brokers = st.slider("Brokers (service nodes)", 1, 10, 3)
+        load = st.slider("Target load", 0.05, 0.90, 0.30, 0.05,
+                         help="Total offered rate as a fraction of total broker capacity")
+        seed = st.number_input("Seed", min_value=0, value=42, step=1)
+        with st.expander("Controller parameters"):
+            window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5,
+                                     help="Seconds per controller iteration")
+            warmup = st.number_input("Warm-up windows", 0, 100, 4)
+            eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
+            gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
+            beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
+    else:
+        config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
+        config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
+
+    launch_col, stop_col = st.columns(2)
+    if launch_col.button("Launch", type="primary", width="stretch"):
+        try:
+            if topology_source == "Generate":
+                config = {
+                    "simulation": {"window": window, "warmup": int(warmup), "mode": "synchronous"},
+                    "algorithm": {"eta": eta, "gamma": gamma, "beta": beta},
+                    "topology": generate_topology_config(n_sources, n_brokers, load, int(seed)),
+                }
+                label = f"Generated {n_sources}×{n_brokers}, load {load:.0%}, seed {seed}"
+            else:
+                config = load_config(config_file)
+                label = config_file.name
+            launch_simulation(holder, config, label)
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+    if stop_col.button("Stop", width="stretch", disabled=not is_running(holder)):
+        stop_simulation(holder)
+        st.rerun()
+
+if RUN_CONFIG.exists() and holder["label"]:
+    with st.expander(f"Topology: {holder['label']}"):
+        topo_cfg = yaml.safe_load(RUN_CONFIG.read_text())["topology"]
+        src_col, brk_col = st.columns(2)
+        src_col.dataframe(pd.DataFrame(topo_cfg["sources"]).rename(columns={"rate": "rate (pkt/s)"}), hide_index=True)
+        brk_col.dataframe(pd.DataFrame(topo_cfg["brokers"]).rename(columns={"capacity": "capacity (pkt/s)"}), hide_index=True)
+
+# --- Live charts ---
+
 def load_data():
-    if not os.path.exists(METRICS_FILE):
+    if not METRICS_FILE.exists():
         return None
     try:
         return pd.read_csv(METRICS_FILE)
@@ -21,11 +122,27 @@ def load_data():
         st.error(f"Error reading metrics file: {e}")
         return None
 
+def render_status(df):
+    proc = holder["proc"]
+    progress = f" · iteration {int(df['iteration'].iloc[-1])}, t = {df['timestamp'].iloc[-1]:.0f}s" if df is not None and not df.empty else ""
+    if is_running(holder):
+        st.success(f"Running: {holder['label']}{progress}")
+    elif proc is not None:
+        code = proc.returncode
+        if code == 0:
+            st.info(f"Finished: {holder['label']}{progress}")
+        else:
+            st.warning(f"Stopped: {holder['label']}{progress}")
+            log_tail = RUN_LOG.read_text(errors="replace").strip().splitlines()[-15:] if RUN_LOG.exists() else []
+            if any("Traceback" in line or "Error" in line for line in log_tail):
+                st.code("\n".join(log_tail))
+
 # Main layout: the fragment re-runs on its own every REFRESH_RATE seconds,
 # so each chart key is registered exactly once per run.
 @st.fragment(run_every=REFRESH_RATE)
 def render_dashboard():
     df = load_data()
+    render_status(df)
 
     if df is not None and not df.empty:
         # Top Row: KPIs
@@ -69,9 +186,9 @@ def render_dashboard():
                          title="Max Utilization over Time")
         st.plotly_chart(fig_util, width="stretch", key="chart_utilization")
 
+    elif is_running(holder):
+        st.info("Simulation started; the first point appears after the first window.")
     else:
-        st.warning("Waiting for simulation data... Please run `python src/cli.py run --config <config>.yaml` in another terminal.")
-        if df is None:
-            st.info("Simulation metrics file not found. Once the simulation starts, it will appear here.")
+        st.info("No simulation data yet. Choose a topology in the sidebar and press **Launch**.")
 
 render_dashboard()

@@ -37,3 +37,6 @@ desktop.ini
 # Project specific
 simulation_metrics.csv
 dashboard_*.png
+
+# Dashboard-launched runs (generated config + log)
+runs/

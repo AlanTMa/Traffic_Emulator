@@ -36,7 +36,14 @@ class SimulationState:
     # Request tracking: request_id -> {timestamps}
     requests: Dict[int, Dict[str, float]]
 
-    def __init__(self, n_sources: int, n_brokers: int, mu_links: np.ndarray, mu_brokers: np.ndarray):
+    def __init__(self, n_sources: int, n_brokers: int, mu_links: np.ndarray, mu_brokers: np.ndarray,
+                 keep_requests: bool = True):
+        # keep_requests=False drops each request's record once it completes,
+        # so open-ended runs don't grow memory without bound; completed/
+        # latency_sum still track the mean end-to-end latency.
+        self.keep_requests = keep_requests
+        self.completed = 0
+        self.latency_sum = 0.0
         self.access_queues = {
             i: {j: Queue(capacity=mu_links[i, j]) for j in range(n_brokers)}
             for i in range(n_sources)
