@@ -5,3 +5,4 @@ pyyaml
 matplotlib
 pytest
 streamlit
+plotly

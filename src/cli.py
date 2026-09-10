@@ -61,7 +61,9 @@ def run_simulation(config_path: str):
         handler.handle_event(event)
 
     try:
-        engine.run(duration=duration, handler=wrapper)
+        # Set real_time=True so the simulation matches the wall clock
+        # This allows the live dashboard to update in real-time.
+        engine.run(duration=duration, handler=wrapper, real_time=True)
     except KeyboardInterrupt:
         pass
 
