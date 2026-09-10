@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,9 @@ METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema
 # The launched config and CLI log live with the run they belong to
 RUN_CONFIG = OUTPUT_DIR / "dashboard_config.yaml"
 RUN_LOG = OUTPUT_DIR / "dashboard.log"
+# Observer mode (TRAFFIC_EMULATOR_OBSERVER=1): watch a run started elsewhere, e.g. the distributed
+# emulator; the dashboard never launches or controls anything then.
+OBSERVER = os.environ.get("TRAFFIC_EMULATOR_OBSERVER") == "1"
 REFRESH_RATE = 2 # seconds
 MAX_ROWS = 3000  # most recent iterations kept for plotting
 
@@ -83,61 +87,94 @@ holder = sim_process()
 
 # --- Sidebar: setup and launch ---
 
-with st.sidebar:
-    st.header("Simulation setup")
-    topology_source = st.radio("Topology", ["Generate", "Config file"], horizontal=True)
+def run_metadata():
+    try:
+        return json.loads((OUTPUT_DIR / "run.json").read_text())
+    except (OSError, ValueError):
+        return None
 
-    if topology_source == "Generate":
-        n_sources = st.slider("Sources (producers)", 1, 20, 5)
-        n_brokers = st.slider("Brokers (service nodes)", 1, 10, 3)
-        load = st.slider("Target load", 0.05, 0.90, 0.30, 0.05,
-                         help="Total offered rate as a fraction of total broker capacity")
-        seed = st.number_input("Seed", min_value=0, value=42, step=1)
-        mode = st.selectbox("Controller mode", list(MODE_HELP), format_func=lambda m: MODE_HELP[m][0],
-                            help="\n\n".join(f"**{label}**: {text}" for label, text in MODE_HELP.values()))
-        algorithm1 = mode != "windowed_stochastic"
-        with st.expander("Controller parameters"):
-            window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5,
-                                     help="Seconds per controller iteration")
-            if algorithm1:
-                eta = st.slider("eta (Algorithm 1 step size)", 0.01, 1.0, 0.25)
-                gamma = st.slider("gamma (price damping)", 0.01, 1.0, 0.50)
-                delta_s = st.number_input("delta_s (capacity margin)", 0.0, 1.0, 1e-8, format="%.1e")
-            else:
-                warmup = st.number_input("Warm-up windows", 0, 100, 4)
-                eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
-                gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
-                beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
-    else:
-        config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
-        config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
+def render_observer_sidebar():
+    """Observer mode: this dashboard only watches a run started elsewhere (distributed launcher)."""
+    with st.sidebar:
+        st.header("Observing run")
+        st.caption(f"`{OUTPUT_DIR}`")
+        meta = run_metadata()
+        if meta is None:
+            st.info("Waiting for the controller to write run.json ...")
+            return
+        st.markdown(f"**Backend:** {meta.get('execution_backend', 'in_process')}  \n"
+                    f"**Controller:** {meta.get('controller_mode')}  \n"
+                    f"**Topology:** {meta.get('n_sources')} sources x {meta.get('n_brokers')} brokers  \n"
+                    f"**Seed:** {meta.get('seed')}")
+        params = meta.get("parameters", {})
+        st.markdown("  \n".join(f"{k} = {v}" for k, v in params.items()))
+        processes = meta.get("processes")
+        if processes:
+            with st.expander("Processes"):
+                for role, mapping in processes.items():
+                    st.markdown(f"**{role}s:** " + ", ".join(f"{v} ({k})" for k, v in mapping.items()))
+        for note in meta.get("notes", []):
+            st.caption(note)
+        st.caption("The run is controlled by its launcher: stop it with Ctrl+C there.")
 
-    launch_col, stop_col = st.columns(2)
-    if launch_col.button("Launch", type="primary", width="stretch"):
-        try:
-            if topology_source == "Generate":
+if OBSERVER:
+    render_observer_sidebar()
+else:
+    with st.sidebar:
+        st.header("Simulation setup")
+        topology_source = st.radio("Topology", ["Generate", "Config file"], horizontal=True)
+
+        if topology_source == "Generate":
+            n_sources = st.slider("Sources (producers)", 1, 20, 5)
+            n_brokers = st.slider("Brokers (service nodes)", 1, 10, 3)
+            load = st.slider("Target load", 0.05, 0.90, 0.30, 0.05,
+                             help="Total offered rate as a fraction of total broker capacity")
+            seed = st.number_input("Seed", min_value=0, value=42, step=1)
+            mode = st.selectbox("Controller mode", list(MODE_HELP), format_func=lambda m: MODE_HELP[m][0],
+                                help="\n\n".join(f"**{label}**: {text}" for label, text in MODE_HELP.values()))
+            algorithm1 = mode != "windowed_stochastic"
+            with st.expander("Controller parameters"):
+                window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5,
+                                         help="Seconds per controller iteration")
                 if algorithm1:
-                    simulation = {"window": window, "controller_mode": mode, "seed": int(seed)}
-                    algorithm = {"eta": eta, "gamma": gamma, "delta_s": float(delta_s), "eps": 1e-12}
+                    eta = st.slider("eta (Algorithm 1 step size)", 0.01, 1.0, 0.25)
+                    gamma = st.slider("gamma (price damping)", 0.01, 1.0, 0.50)
+                    delta_s = st.number_input("delta_s (capacity margin)", 0.0, 1.0, 1e-8, format="%.1e")
                 else:
-                    simulation = {"window": window, "warmup": int(warmup), "controller_mode": mode,
-                                  "seed": int(seed)}
-                    algorithm = {"eta": eta, "gamma": gamma, "beta": beta}
-                config = {"simulation": simulation, "algorithm": algorithm,
-                          "topology": generate_topology_config(n_sources, n_brokers, load, int(seed))}
-                label = f"Generated {n_sources}×{n_brokers}, load {load:.0%}, seed {seed}"
-            else:
-                config = load_config(config_file)
-                label = config_file.name
-            launch_simulation(holder, config, label)
-            st.rerun()
-        except ValueError as e:
-            st.error(str(e))
-    if stop_col.button("Stop", width="stretch", disabled=not is_running(holder)):
-        stop_simulation(holder)
-        st.rerun()
+                    warmup = st.number_input("Warm-up windows", 0, 100, 4)
+                    eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
+                    gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
+                    beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
+        else:
+            config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
+            config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
 
-if RUN_CONFIG.exists() and holder["label"]:
+        launch_col, stop_col = st.columns(2)
+        if launch_col.button("Launch", type="primary", width="stretch"):
+            try:
+                if topology_source == "Generate":
+                    if algorithm1:
+                        simulation = {"window": window, "controller_mode": mode, "seed": int(seed)}
+                        algorithm = {"eta": eta, "gamma": gamma, "delta_s": float(delta_s), "eps": 1e-12}
+                    else:
+                        simulation = {"window": window, "warmup": int(warmup), "controller_mode": mode,
+                                      "seed": int(seed)}
+                        algorithm = {"eta": eta, "gamma": gamma, "beta": beta}
+                    config = {"simulation": simulation, "algorithm": algorithm,
+                              "topology": generate_topology_config(n_sources, n_brokers, load, int(seed))}
+                    label = f"Generated {n_sources}×{n_brokers}, load {load:.0%}, seed {seed}"
+                else:
+                    config = load_config(config_file)
+                    label = config_file.name
+                launch_simulation(holder, config, label)
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+        if stop_col.button("Stop", width="stretch", disabled=not is_running(holder)):
+            stop_simulation(holder)
+            st.rerun()
+
+if not OBSERVER and RUN_CONFIG.exists() and holder["label"]:
     with st.expander(f"Topology: {holder['label']}"):
         topo_cfg = yaml.safe_load(RUN_CONFIG.read_text())["topology"]
         src_col, brk_col = st.columns(2)
@@ -231,6 +268,18 @@ def render_status(df):
     progress = f" · iteration {int(df['iteration'].iloc[-1])}, t = {df['timestamp'].iloc[-1]:.0f}s" if df is not None and not df.empty else ""
     if df is not None and not df.empty:
         progress += f" · {MODE_HELP.get(df['controller_mode'].iloc[-1], (df['controller_mode'].iloc[-1],))[0]}"
+        if "execution_backend" in df:
+            progress += f" · {df['execution_backend'].iloc[-1]} backend"
+    if OBSERVER:
+        if df is None or df.empty:
+            return
+        age = time.time() - float(df["wall_time"].iloc[-1])
+        window = float(df["round_duration"].iloc[-1]) if "round_duration" in df else 5.0
+        if age < 3 * max(window, 1.0) + 2:
+            st.success(f"Live{progress}")
+        else:
+            st.warning(f"No new data for {age:.0f} s{progress}")
+        return
     if is_running(holder):
         st.success(f"Running: {holder['label']}{progress}")
     elif proc is not None:
