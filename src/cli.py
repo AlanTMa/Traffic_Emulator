@@ -7,8 +7,10 @@ import numpy as np
 import signal
 import sys
 import time
+import yaml
 from pathlib import Path
-from src.model.config import controller_mode, load_config, topology_from_config
+from src.model.config import CONTROLLER_MODES, controller_mode, load_config, topology_from_config
+from src.model.generate import generate_topology_config
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
@@ -154,12 +156,60 @@ def run_static(topo, params, duration, telemetry, real_time):
     print(f"Iterations: {state.iteration}, objective: {record['objective']:.10f}, final residual: {residual:.2e}")
     print(record["certificate_status"])
 
+# Per-mode defaults for generated runs (same as the shipped configs)
+GENERATED_DEFAULTS = {
+    "static_algorithm1": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12},
+    "capacity_safe_event_driven": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12, "beta": 0.3},
+    "windowed_stochastic": {"eta": 0.35, "gamma": 0.5, "beta": 0.3},
+}
+
+def generated_config(args) -> dict:
+    """
+    Config for a generated N x M topology (src/model/generate.py). The same
+    seed drives topology generation and the event simulation's RNG, so the
+    written config reproduces the run.
+    """
+    algorithm = dict(GENERATED_DEFAULTS[args.controller])
+    for key in ("eta", "gamma", "beta", "delta_s"):
+        value = getattr(args, key)
+        if value is not None:
+            if key not in algorithm:
+                raise ValueError(f"--{key.replace('_', '-')} does not apply to controller {args.controller}")
+            algorithm[key] = value
+    simulation = {"controller_mode": args.controller, "window": args.window, "seed": args.seed}
+    if args.duration is not None:
+        simulation["duration"] = args.duration
+    if args.controller == "windowed_stochastic":
+        simulation["warmup"] = args.warmup
+    return {
+        "simulation": simulation,
+        "algorithm": algorithm,
+        "topology": generate_topology_config(args.sources, args.brokers, args.load, args.seed),
+    }
+
 def main():
     parser = argparse.ArgumentParser(description="Traffic Allocation Emulator")
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Run a simulation")
-    run_parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
+    run_parser = subparsers.add_parser(
+        "run", help="Run a simulation",
+        description="Run a config (--config), or generate an N x M topology (--sources/--brokers/...). "
+                    "Generated runs write their full config to <output-dir>/generated_config.yaml.")
+    source = run_parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", type=str, help="Path to YAML config file")
+    source.add_argument("--sources", type=int, help="Generate a topology with this many sources")
+    run_parser.add_argument("--brokers", type=int, help="Brokers in the generated topology")
+    run_parser.add_argument("--load", type=float, default=0.3,
+                            help="Generated: total offered rate / total broker capacity (default 0.3)")
+    run_parser.add_argument("--seed", type=int, default=42,
+                            help="Generated: seed for the topology and the simulation (default 42)")
+    run_parser.add_argument("--controller", choices=CONTROLLER_MODES, default="windowed_stochastic",
+                            help="Generated: controller mode (default windowed_stochastic)")
+    run_parser.add_argument("--window", type=float, default=5.0, help="Generated: seconds per window (default 5)")
+    run_parser.add_argument("--duration", type=float, help="Generated: simulated seconds (default: until stopped)")
+    run_parser.add_argument("--warmup", type=int, default=4, help="Generated windowed_stochastic: warm-up windows")
+    for name in ("eta", "gamma", "beta", "delta-s"):
+        run_parser.add_argument(f"--{name}", type=float, help=f"Generated: override {name} (mode defaults otherwise)")
     run_parser.add_argument("--no-realtime", action="store_true",
                             help="Run as fast as possible instead of pacing to the wall clock")
     run_parser.add_argument("--output-dir", default="runs/latest",
@@ -168,7 +218,21 @@ def main():
     args = parser.parse_args()
 
     if args.command == "run":
-        run_simulation(args.config, real_time=not args.no_realtime, output_dir=args.output_dir)
+        config_path = args.config
+        if args.sources is not None:
+            if args.brokers is None:
+                parser.error("--sources needs --brokers")
+            try:
+                config = generated_config(args)
+            except ValueError as e:
+                parser.error(str(e))
+            out = Path(args.output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            config_path = out / "generated_config.yaml"
+            config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+            print(f"Generated {args.sources}x{args.brokers} topology at load {args.load:.0%} (seed {args.seed}); "
+                  f"config written to {config_path}")
+        run_simulation(str(config_path), real_time=not args.no_realtime, output_dir=args.output_dir)
     else:
         parser.print_help()
 
