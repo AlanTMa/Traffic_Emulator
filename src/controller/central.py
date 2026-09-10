@@ -15,16 +15,28 @@ def system_objective(lambda_ij: np.ndarray, mu_links: np.ndarray, mu_brokers: np
     """
     F = sum_ij lambda_ij / (mu_ij - lambda_ij) + sum_j Lambda_j / (mu_j - Lambda_j)
     (flow-weighted M/M/1 delay, paper eq. 4); +inf outside the open domain.
+    Routes with mu_ij = 0 do not exist (sparse topology) and must carry no flow.
     """
     lambda_ij = np.asarray(lambda_ij, dtype=float)
     loads = lambda_ij.sum(axis=0)
-    if np.any(lambda_ij < 0) or np.any(lambda_ij >= mu_links) or np.any(loads >= mu_brokers):
+    available = mu_links > 0
+    if (np.any(lambda_ij < 0) or np.any(loads >= mu_brokers) or np.any(lambda_ij[~available] != 0)
+            or np.any(lambda_ij[available] >= mu_links[available])):
         return np.inf
-    return float(np.sum(lambda_ij / (mu_links - lambda_ij)) + np.sum(loads / (mu_brokers - loads)))
+    if available.all():
+        link_terms = np.sum(lambda_ij / (mu_links - lambda_ij))
+    else:
+        link_terms = np.sum(lambda_ij[available] / (mu_links[available] - lambda_ij[available]))
+    return float(link_terms + np.sum(loads / (mu_brokers - loads)))
 
 def _objective_gradient(lambda_ij, mu_links, mu_brokers):
     loads = lambda_ij.sum(axis=0)
-    return mu_links / (mu_links - lambda_ij) ** 2 + (mu_brokers / (mu_brokers - loads) ** 2)[None, :]
+    broker = (mu_brokers / (mu_brokers - loads) ** 2)[None, :]
+    available = mu_links > 0
+    if available.all():
+        return mu_links / (mu_links - lambda_ij) ** 2 + broker
+    link = np.divide(mu_links, (mu_links - lambda_ij) ** 2, out=np.zeros_like(mu_links), where=available)
+    return np.where(available, link + broker, 0.0)
 
 def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, active_tol: float = 1e-7):
     """
@@ -53,7 +65,7 @@ def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, act
         l0.ravel(),
         jac=lambda x: _objective_gradient(x.reshape(m, n), mu_links, mu_brokers).ravel(),
         method="SLSQP",
-        bounds=[(0.0, float(v - margin)) for v in mu_links.ravel()],
+        bounds=[(0.0, float(v - margin)) if v > 0 else (0.0, 0.0) for v in mu_links.ravel()],
         constraints=[
             {"type": "eq", "fun": lambda x: a_eq @ x - lambdas_total, "jac": lambda x: a_eq},
             {"type": "ineq", "fun": lambda x: mu_brokers - margin - a_col @ x, "jac": lambda x: -a_col},
@@ -66,9 +78,9 @@ def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, act
     # SLSQP reliably identifies the active set but may stop with a small KKT
     # error; polish that active set by solving the open-domain KKT equations.
     l_slsqp = result.x.reshape(m, n)
-    active = l_slsqp > active_tol
+    active = (l_slsqp > active_tol) & (mu_links > 0)
     edges = list(zip(*np.where(active)))
-    marginal0 = mu_links / (mu_links - l_slsqp) ** 2 + mm1_marginal_cost_vectorized(l_slsqp.sum(axis=0), mu_brokers)[None, :]
+    marginal0 = _objective_gradient(l_slsqp, mu_links, mu_brokers)
     alpha0 = np.array([np.mean(marginal0[i, active[i]]) for i in range(m)])
     z0 = np.r_[np.array([l_slsqp[i, j] for i, j in edges]), alpha0]
 

@@ -35,7 +35,7 @@ EVENT_MODES = ("frozen", "windowed_stochastic", "capacity_safe_event_driven")
 def scaled_topology(topology: Topology, r: float) -> Topology:
     """Same topology with every source rate multiplied by r."""
     return Topology(r * topology.lambdas_total, topology.mu_links.copy(), topology.mu_brokers.copy(),
-                    list(topology.sources), list(topology.brokers))
+                    list(topology.sources), list(topology.brokers), route_mask=topology.route_mask.copy())
 
 def canonical_5x3(r: float = 1.0) -> Topology:
     """The notebook's exact 5x3 instance, source rates scaled by r."""
@@ -72,7 +72,7 @@ def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=2
         s_hist.append(s_t)
         route_rel.append(state.route_rel)
         broker_headroom.append(np.min(topo.mu_brokers - state.lambda_ij.sum(axis=0)))
-        link_headroom.append(np.min(topo.mu_links - state.lambda_ij))
+        link_headroom.append(np.min((topo.mu_links - state.lambda_ij)[topo.route_mask]))
         if residual < tol:
             # Notebook stopping point; continue to the paper's Step 5 (certificate)
             iterations_to_tol = iterations_to_tol or state.iteration
@@ -91,8 +91,8 @@ def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=2
         "model_mean_sojourn": objective[-1] / topo.lambdas_total.sum(),
         "fraction_ij": L / topo.lambdas_total[:, None],
         "util_j": L.sum(axis=0) / topo.mu_brokers,
-        "access_util_ij": L / topo.mu_links,
-        "max_access_util": float(np.max(L / topo.mu_links)),
+        "access_util_ij": np.where(topo.route_mask, L / np.where(topo.route_mask, topo.mu_links, 1.0), np.nan),
+        "max_access_util": float(np.max(L[topo.route_mask] / topo.mu_links[topo.route_mask])),
         "price_j": state.prices,
         "certified": diag["certified"],
         "failed": diag["failed"],
@@ -191,7 +191,7 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "fraction_ij": np.array(last["fraction_ij"]),
         "util_planned_j": np.array(last["util_j"]),
         "access_util_planned_ij": np.array(last["access_util_ij"]),
-        "max_access_util_planned": float(np.max(last["access_util_ij"])),
+        "max_access_util_planned": float(np.nanmax(np.array(last["access_util_ij"], dtype=float))),
         "price_j": np.array(last["price_j"]),
         "objective": last["objective"],
         "r_price": last["r_price"], "r_fixed_point": last["r_fixed_point"],
@@ -199,7 +199,7 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "r_kkt_complementarity": last["r_kkt_complementarity"],
         "certified": last["certified"],
         "min_planned_broker_headroom": float(np.min(topo.mu_brokers - planned_loads)),
-        "min_planned_link_headroom": float(np.min(topo.mu_links - planned_links)),
+        "min_planned_link_headroom": float(np.min((topo.mu_links - planned_links)[:, topo.route_mask])),
         "planned_broker_overload_windows": int(np.sum(np.any(planned_loads >= topo.mu_brokers, axis=1))),
         "safe_step_binding_windows": int(np.sum(s_t < 1.0)) if algorithm1 else None,
         "min_s_t": float(np.nanmin(s_t)) if algorithm1 else None,

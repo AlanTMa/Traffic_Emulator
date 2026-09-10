@@ -4,7 +4,7 @@ Event handler for the discrete-event simulation.
 import numpy as np
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
-from src.controller.best_response import best_response_mm1
+from src.controller.best_response import best_response_available
 from src.controller.synchronous import algorithm1_initial_state, iteration_step
 from src.telemetry.metrics import TelemetryBuffer
 from src.telemetry.schema import controller_snapshot
@@ -299,7 +299,7 @@ class SimulationHandler:
         if self.window_idx >= self.warmup_windows:
             for i in range(len(self.topology.sources)):
                 try:
-                    x_br = best_response_mm1(self.topology.mu_links[i, :], self.prices,
+                    x_br = best_response_available(self.topology.mu_links[i, :], self.prices,
                                              self.topology.lambdas_total[i])
                 except RuntimeError:
                     self.br_failures.append(i)  # keep the current split; recorded in telemetry
@@ -337,7 +337,9 @@ class SimulationHandler:
             # Raw per-window measured arrival rates and utilizations
             broker_rate_measured_j=self.last_broker_rate,
             access_rate_measured_ij=self.last_access_rate,
-            access_util_measured_ij=self.last_access_rate / self.topology.mu_links,
+            access_util_measured_ij=np.divide(self.last_access_rate, self.topology.mu_links,
+                                              out=np.full(self.x_ij.shape, np.nan),
+                                              where=self.topology.mu_links > 0),   # NaN: no link
             **self._queue_and_latency_metrics(),
         ))
         self.window_latencies = []

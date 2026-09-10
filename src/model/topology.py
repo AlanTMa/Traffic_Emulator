@@ -25,12 +25,16 @@ class Topology:
         mu_brokers: (M,) broker service rates (work units/s).
         sources: List of source identifiers.
         brokers: List of broker identifiers.
+        route_mask: (N, M) bool, True where the access link exists (default:
+            all True). Unavailable links are stored with mu_ij = 0 and carry
+            no flow; every model function treats mu_ij = 0 as "no link".
     """
     lambdas_total: np.ndarray
     mu_links: np.ndarray
     mu_brokers: np.ndarray
     sources: list
     brokers: list
+    route_mask: np.ndarray = None
 
     def __post_init__(self):
         """Validate dimensions, ids and values; raises ValueError on any problem."""
@@ -51,12 +55,19 @@ class Topology:
             raise ValueError(f"topology rates and capacities must be numeric: {e}") from None
 
         # Dimensions
+        if self.route_mask is None:
+            self.route_mask = np.ones((n_sources, n_brokers), dtype=bool)
+        self.route_mask = np.asarray(self.route_mask, dtype=bool)
+        if self.route_mask.shape != (n_sources, n_brokers):
+            raise ValueError(f"route_mask shape {self.route_mask.shape} must be ({n_sources}, {n_brokers})")
         if self.lambdas_total.shape != (n_sources,):
             raise ValueError(f"lambdas_total shape {self.lambdas_total.shape} must be ({n_sources},)")
         if self.mu_links.shape != (n_sources, n_brokers):
             raise ValueError(f"mu_links shape {self.mu_links.shape} must be ({n_sources}, {n_brokers})")
         if self.mu_brokers.shape != (n_brokers,):
             raise ValueError(f"mu_brokers shape {self.mu_brokers.shape} must be ({n_brokers},)")
+        # Unavailable links have no capacity (the mask is the explicit statement)
+        self.mu_links = np.where(self.route_mask, self.mu_links, 0.0)
 
         # Values: finite; rates >= 0; capacities > 0 (the M/M/1 model needs
         # every access link and broker to serve at a positive rate)
@@ -67,9 +78,14 @@ class Topology:
         if np.any(self.lambdas_total < 0):
             bad = [self.sources[i] for i in np.where(self.lambdas_total < 0)[0]]
             raise ValueError(f"source rates must be >= 0 (negative for {bad})")
-        if np.any(self.mu_links <= 0):
-            bad = [f"{self.sources[i]}->{self.brokers[j]}" for i, j in zip(*np.where(self.mu_links <= 0))]
+        if np.any(self.route_mask & (self.mu_links <= 0)):
+            bad = [f"{self.sources[i]}->{self.brokers[j]}"
+                   for i, j in zip(*np.where(self.route_mask & (self.mu_links <= 0)))]
             raise ValueError(f"access capacities must be > 0 (not for {bad})")
+        stranded = [self.sources[i] for i in range(n_sources)
+                    if self.lambdas_total[i] > 0 and not self.route_mask[i].any()]
+        if stranded:
+            raise ValueError(f"sources with traffic but no available access link: {stranded}")
         if np.any(self.mu_brokers <= 0):
             bad = [self.brokers[j] for j in np.where(self.mu_brokers <= 0)[0]]
             raise ValueError(f"broker capacities must be > 0 (not for {bad})")

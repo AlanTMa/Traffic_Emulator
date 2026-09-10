@@ -3,7 +3,7 @@ Synchronous implementation of the WiOpt distributed routing algorithm.
 """
 import numpy as np
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
-from src.controller.best_response import best_response_mm1
+from src.controller.best_response import best_response_available
 from src.controller.diagnostics import compute_diagnostics
 from src.controller.feasibility import transportation_feasibility
 from src.simulation.state import SystemState
@@ -78,7 +78,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     br_failures = []
     for i in range(topology.n_sources):
         try:
-            lambda_br[i, :] = best_response_mm1(
+            lambda_br[i, :] = best_response_available(
                 topology.mu_links[i, :],
                 new_prices,
                 topology.lambdas_total[i]

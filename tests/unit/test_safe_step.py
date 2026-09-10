@@ -90,12 +90,12 @@ def test_binding_step_stays_feasible_over_iterations():
 def test_best_response_failure_raises_by_default_and_is_recorded_when_held(monkeypatch):
     import src.controller.synchronous as sync
     topo, lam0, prices0 = _binding_instance()
-    real = sync.best_response_mm1
+    real = sync.best_response_available
     def flaky(mu_row, p, lam_i, *args, **kwargs):
         if mu_row[1] == 100.0:          # source A's row
             raise RuntimeError("solver did not converge")
         return real(mu_row, p, lam_i, *args, **kwargs)
-    monkeypatch.setattr(sync, "best_response_mm1", flaky)
+    monkeypatch.setattr(sync, "best_response_available", flaky)
 
     with pytest.raises(RuntimeError):
         iteration_step(SystemState(lam0.copy(), prices0.copy()), topo, 0.25, 0.01)

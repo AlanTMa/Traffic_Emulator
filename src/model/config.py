@@ -59,10 +59,12 @@ def topology_from_config(config: dict) -> Topology:
     Construct a Topology from a configuration dictionary.
 
     Expects topology.sources [{id, rate}], topology.brokers [{id, capacity}]
-    and topology.access_capacities {"<source>-><broker>": capacity} with
-    every source->broker pair exactly once. Missing, unknown, duplicate or
-    malformed entries raise ValueError; no capacity is ever left at zero by
-    omission. Values are then validated by Topology.
+    and topology.access_capacities {"<source>-><broker>": capacity}. Every
+    source->broker pair must appear exactly once, either there or in the
+    optional topology.unavailable_links list ["<source>-><broker>", ...] of
+    links that do not exist (sparse topologies). Missing, unknown, duplicate,
+    conflicting or malformed entries raise ValueError; no capacity is ever
+    left at zero by omission. Values are then validated by Topology.
     """
     if not isinstance(config, dict) or not isinstance(config.get('topology'), dict):
         raise ValueError("config needs a 'topology' mapping")
@@ -96,7 +98,9 @@ def topology_from_config(config: dict) -> Topology:
     brk_map = {name: j for j, name in enumerate(brokers)}
     mu_links = np.zeros((len(sources), len(brokers)))
     specified = np.zeros(mu_links.shape, dtype=bool)   # not a value sentinel: NaN must stay an error
-    for link, cap in access_cfg.items():
+    route_mask = np.ones(mu_links.shape, dtype=bool)
+
+    def link_index(link):
         parts = str(link).split('->')
         if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
             raise ValueError(f'malformed access link key {link!r}; expected "<source>-><broker>"')
@@ -108,18 +112,30 @@ def topology_from_config(config: dict) -> Topology:
         i, j = src_map[src_id], brk_map[brk_id]
         if specified[i, j]:
             raise ValueError(f"access link {src_id}->{brk_id} is specified more than once")
-        mu_links[i, j] = _number(cap, f"access capacity {link!r}")
         specified[i, j] = True
+        return i, j
+
+    for link, cap in access_cfg.items():
+        i, j = link_index(link)
+        mu_links[i, j] = _number(cap, f"access capacity {link!r}")
+    unavailable = topo_cfg.get('unavailable_links') or []
+    if not isinstance(unavailable, list):
+        raise ValueError('topology.unavailable_links must be a list of "<source>-><broker>" links')
+    for link in unavailable:
+        i, j = link_index(link)       # also rejects a link both listed here and given a capacity
+        route_mask[i, j] = False
     missing = [f"{sources[i]}->{brokers[j]}" for i, j in zip(*np.where(~specified))]
     if missing:
-        raise ValueError(f"missing access capacities for {missing}")
+        raise ValueError(f"missing access capacities for {missing} "
+                         "(list links that do not exist under topology.unavailable_links)")
 
     return Topology(
         lambdas_total=np.array(lambdas_total),
         mu_links=mu_links,
         mu_brokers=np.array(mu_brokers),
         sources=sources,
-        brokers=brokers
+        brokers=brokers,
+        route_mask=route_mask,
     )
 
 def _number(value, what: str) -> float:

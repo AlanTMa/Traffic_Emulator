@@ -51,7 +51,8 @@ def controller_snapshot(topology, lambda_ij: np.ndarray, prices: np.ndarray, *, 
         "fraction_ij": lambda_ij / np.maximum(lambdas, eps)[:, None],
         "load_j": diag["broker_loads"],
         "util_j": diag["broker_utilization"],
-        "access_util_ij": lambda_ij / topology.mu_links,
+        "access_util_ij": np.divide(lambda_ij, topology.mu_links, out=np.full(lambda_ij.shape, np.nan),
+                                    where=topology.mu_links > 0),     # NaN where no link
         # Prices and multipliers
         "price_j": np.asarray(prices, dtype=float),
         "alpha_i": diag["alpha_i"],

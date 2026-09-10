@@ -1,0 +1,32 @@
+# Sparse access topology example: not every source can reach every broker.
+# Links that do not exist are listed explicitly under unavailable_links; every
+# other source->broker pair must have a capacity (omissions are an error).
+simulation:
+  controller_mode: "capacity_safe_event_driven"
+  window: 5
+  seed: 1
+
+algorithm:
+  eta: 0.25
+  gamma: 0.5
+  delta_s: 1.0e-8
+  eps: 1.0e-12
+
+topology:
+  sources:
+    - {id: "P0", rate: 6.0}
+    - {id: "P1", rate: 5.0}
+    - {id: "P2", rate: 8.0}
+  brokers:
+    - {id: "SN1", capacity: 12.0}
+    - {id: "SN2", capacity: 9.0}
+    - {id: "SN3", capacity: 10.0}
+  access_capacities:
+    "P0->SN1": 7.0
+    "P0->SN2": 6.0
+    "P1->SN2": 5.0
+    "P1->SN3": 8.0
+    "P2->SN1": 6.0
+    "P2->SN2": 4.0
+    "P2->SN3": 7.0
+  unavailable_links: ["P0->SN3", "P1->SN1"]

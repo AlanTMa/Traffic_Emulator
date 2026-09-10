@@ -105,3 +105,17 @@ def best_response_mm1(mu_row: np.ndarray, p: np.ndarray, lam_i: float, flow_tol:
         )
 
     return best_x
+
+def best_response_available(mu_row: np.ndarray, p: np.ndarray, lam_i: float, **kwargs) -> np.ndarray:
+    """
+    Best response over the routes that exist (mu_row > 0); unavailable routes
+    (mu_row == 0 in a sparse topology) get zero flow. Identical to
+    best_response_mm1 when every route exists.
+    """
+    mu_row = np.asarray(mu_row, dtype=float)
+    available = mu_row > 0
+    if available.all():
+        return best_response_mm1(mu_row, p, lam_i, **kwargs)
+    x = np.zeros_like(mu_row)
+    x[available] = best_response_mm1(mu_row[available], np.asarray(p, dtype=float)[available], lam_i, **kwargs)
+    return x
