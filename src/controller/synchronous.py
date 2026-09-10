@@ -56,12 +56,66 @@ def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.nd
     """
     return max(0.0, float(np.min(safe_step_bounds(lambda_ij, lambda_br, loads, mu_brokers, eta, delta_s, variant))))
 
+def source_best_response(mu_row: np.ndarray, prices: np.ndarray, lam_i: float) -> np.ndarray:
+    """
+    Algorithm 1 Step 2 for ONE source: its best response to the published
+    prices over the routes it has. Runs wherever the source runs (in process,
+    or inside a distributed source worker). Raises RuntimeError/ValueError on
+    failure; the caller decides whether to hold.
+    """
+    return best_response_available(mu_row, prices, lam_i)
+
+def broker_price(price: float, load: float, mu_j: float, gamma: float, eps: float = 1e-12) -> float:
+    """
+    Algorithm 1 Step 1 for ONE broker: p_j <- (1-gamma) p_j + gamma C_j(Lambda_j).
+    Element-wise identical to update_prices() on the full vector.
+    """
+    return float(update_prices(np.array([price]), np.array([load]), np.array([mu_j]), gamma, eps)[0])
+
+def apply_common_step(state: SystemState, topology, lambda_br: np.ndarray, new_prices: np.ndarray, eta: float,
+                      eps: float = 1e-12, delta_s: float = 1e-8, safe_step_variant: str = "paper",
+                      br_failures: list = None):
+    """
+    Algorithm 1 Steps 3-4, the coordinator's part: given the new broker
+    prices and every source's best response, compute Delta_j, the per-broker
+    bounds s_j, the common step s_t = min_j s_j, and move
+    lambda <- (1 - eta s_t) lambda + eta s_t lambda_br. Updates `state` and
+    returns (state, s_t, max(route_rel, price_rel)).
+    """
+    l_prev = state.lambda_ij.copy()
+    p_prev = state.prices.copy()
+    loads = compute_broker_loads(state.lambda_ij)
+
+    # Safe step
+    s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s, safe_step_variant)
+    s_t = max(0.0, float(np.min(s_j)))
+
+    # Update routing
+    step = eta * s_t
+    new_lambda_ij = (1.0 - step) * state.lambda_ij + step * lambda_br
+
+    # Calculate residuals for convergence
+    route_rel = np.linalg.norm(new_lambda_ij - l_prev) / max(np.linalg.norm(l_prev), eps)
+    price_rel = np.linalg.norm(new_prices - p_prev) / max(np.linalg.norm(p_prev), eps)
+
+    # Update state
+    state.lambda_ij = new_lambda_ij
+    state.prices = new_prices
+    state.iteration += 1
+    state.s_j, state.s_t, state.route_rel, state.price_rel = s_j, s_t, route_rel, price_rel
+    state.br_failures = list(br_failures or [])
+
+    return state, s_t, max(route_rel, price_rel)
+
 def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12,
                    delta_s: float = 1e-8, on_best_response_failure: str = "raise",
                    safe_step_variant: str = "paper"):
     """
-    Perform one iteration of Algorithm 1. Shared by static_algorithm1 and
-    capacity_safe_event_driven, so both modes run the same controller step.
+    Perform one iteration of Algorithm 1: broker prices (Step 1), source best
+    responses (Step 2), common safe step and routing update (Steps 3-4).
+    Shared by static_algorithm1 and capacity_safe_event_driven; the
+    distributed backend runs the same three stages (broker_price,
+    source_best_response, apply_common_step) in separate processes.
 
     delta_s is the capacity margin kept below every broker's capacity by the
     safe step (paper: delta_s; the reference notebook uses 1e-8). eps only
@@ -77,51 +131,26 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     """
     if on_best_response_failure not in ("raise", "hold"):
         raise ValueError(f"on_best_response_failure must be 'raise' or 'hold', not {on_best_response_failure!r}")
-    l_prev = state.lambda_ij.copy()
-    p_prev = state.prices.copy()
 
-    # 1. Calculate current loads
+    # 1. Brokers: damped prices at the planned loads
     loads = compute_broker_loads(state.lambda_ij)
-
-    # 2. Update prices
     new_prices = update_prices(state.prices, loads, topology.mu_brokers, gamma, eps)
 
-    # 3. Each source solves best response
+    # 2. Sources: best responses to the new prices
     lambda_br = np.zeros_like(state.lambda_ij)
     br_failures = []
     for i in range(topology.n_sources):
         try:
-            lambda_br[i, :] = best_response_available(
-                topology.mu_links[i, :],
-                new_prices,
-                topology.lambdas_total[i]
-            )
+            lambda_br[i, :] = source_best_response(topology.mu_links[i, :], new_prices, topology.lambdas_total[i])
         except (RuntimeError, ValueError):
             if on_best_response_failure == "raise":
                 raise
             lambda_br[i, :] = state.lambda_ij[i, :]
             br_failures.append(i)
 
-    # 4. Calculate safe step
-    s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s, safe_step_variant)
-    s_t = max(0.0, float(np.min(s_j)))
-
-    # 5. Update routing
-    step = eta * s_t
-    new_lambda_ij = (1.0 - step) * state.lambda_ij + step * lambda_br
-
-    # Calculate residuals for convergence
-    route_rel = np.linalg.norm(new_lambda_ij - l_prev) / max(np.linalg.norm(l_prev), eps)
-    price_rel = np.linalg.norm(new_prices - p_prev) / max(np.linalg.norm(p_prev), eps)
-
-    # Update state
-    state.lambda_ij = new_lambda_ij
-    state.prices = new_prices
-    state.iteration += 1
-    state.s_j, state.s_t, state.route_rel, state.price_rel = s_j, s_t, route_rel, price_rel
-    state.br_failures = br_failures
-
-    return state, s_t, max(route_rel, price_rel)
+    # 3-4. Coordinator: common safe step and routing update
+    return apply_common_step(state, topology, lambda_br, new_prices, eta, eps, delta_s, safe_step_variant,
+                             br_failures)
 
 def algorithm1_initial_state(topology, delta_s: float = 1e-8, eps: float = 1e-12,
                              initial_lambda: np.ndarray = None) -> SystemState:
