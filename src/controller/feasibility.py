@@ -51,4 +51,15 @@ def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8)
     if not result.success:
         raise ValueError(f"Transportation LP infeasible: {result.message}")
 
-    return result.x[:-1].reshape(m, n)
+    routing = np.maximum(result.x[:-1].reshape(m, n), 0.0)
+    # HiGHS accepts constraint violations up to its feasibility tolerance
+    # (~1e-7), which exceeds the default margin: at an exactly critical
+    # instance it returns zero headroom (lambda_ij = mu_ij). Check the routing
+    # itself and reject anything short of the requested margin.
+    link_headroom = float(np.min(mu_links - routing))
+    broker_headroom = float(np.min(mu_brokers - routing.sum(axis=0)))
+    if min(link_headroom, broker_headroom) < 0.5 * margin:
+        raise ValueError(
+            f"Transportation LP infeasible: no routing keeps headroom >= {margin:g} "
+            f"(best found: links {link_headroom:.3g}, brokers {broker_headroom:.3g})")
+    return routing

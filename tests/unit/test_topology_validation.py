@@ -106,3 +106,17 @@ def test_shipped_configs_are_valid():
     from pathlib import Path
     for path in sorted(Path(__file__).resolve().parents[2].joinpath("config").glob("*.yaml")):
         topology_from_config(load_config(path))
+
+# --- Feasibility LP at the boundary ---
+
+def test_feasibility_rejects_exactly_critical_instances():
+    from src.controller.feasibility import transportation_feasibility
+    # One source sending exactly its two links' capacity: zero headroom
+    with pytest.raises(ValueError, match="headroom"):
+        transportation_feasibility(np.array([10.0]), np.array([[5.0, 5.0]]), np.array([100.0, 100.0]))
+    # Brokers exactly full
+    with pytest.raises(ValueError, match="headroom"):
+        transportation_feasibility(np.array([6.0, 6.0]), np.full((2, 2), 10.0), np.array([6.0, 6.0]))
+    # Just inside the boundary: feasible, with the requested headroom
+    L = transportation_feasibility(np.array([9.99]), np.array([[5.0, 5.0]]), np.array([100.0, 100.0]))
+    assert np.min(5.0 - L) >= 1e-8 and L.sum() == pytest.approx(9.99)
