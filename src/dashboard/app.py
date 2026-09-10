@@ -115,7 +115,7 @@ if RUN_CONFIG.exists() and holder["label"]:
 
 # --- Live charts ---
 
-VIEWS = ["Overview", "Brokers"]
+VIEWS = ["Overview", "Brokers", "Routing"]
 view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
 
 def load_data():
@@ -154,6 +154,21 @@ def per_broker(df, column, brokers):
     out = pd.DataFrame(values, columns=brokers)
     out["iteration"] = df["iteration"].to_numpy()
     return out.melt(id_vars="iteration", var_name="broker", value_name=column)
+
+def per_source(df, column, sources):
+    """Long-form frame (iteration, source, value) from a per-source list column."""
+    return per_broker(df, column, sources).rename(columns={"broker": "source"})
+
+def per_route(df, column, sources, brokers):
+    """Long-form frame (iteration, source, broker, value) from a [source][broker] matrix column."""
+    values = np.array(df[column].tolist(), dtype=float)          # (T, N, M)
+    T, N, M = values.shape
+    return pd.DataFrame({
+        "iteration": np.repeat(df["iteration"].to_numpy(), N * M),
+        "source": np.tile(np.repeat(sources, M), T),
+        "broker": np.tile(brokers, T * N),
+        column: values.reshape(-1),
+    })
 
 def render_status(df):
     proc = holder["proc"]
@@ -231,7 +246,32 @@ def render_brokers(df):
         table["measured utilization"] = last["util_measured_j"]
     st.dataframe(table.style.format({c: "{:.2%}" if "utilization" in c else "{:.6g}" for c in table.columns}))
 
-RENDERERS = {"Overview": render_overview, "Brokers": render_brokers}
+def render_routing(df):
+    sources, brokers = node_names(df)
+    st.subheader("Routing fractions λ_ij / λ_i")
+    frac = per_route(df, "fraction_ij", sources, brokers)
+    fig = px.line(frac, x="iteration", y="fraction_ij", color="broker", facet_col="source",
+                  facet_col_wrap=min(len(sources), 5),
+                  labels={"iteration": "Iteration", "fraction_ij": "Fraction"})
+    fig.update_yaxes(range=[-0.02, 1.02])
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+    st.plotly_chart(fig, width="stretch", key="chart_routing_fractions")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Current split")
+        current = pd.DataFrame(df["fraction_ij"].iloc[-1], index=sources, columns=brokers)
+        fig = px.imshow(current, text_auto=".1%", zmin=0, zmax=1, color_continuous_scale="Blues",
+                        labels={"x": "Broker", "y": "Source", "color": "Fraction"}, aspect="auto")
+        st.plotly_chart(fig, width="stretch", key="chart_routing_heatmap")
+    with col2:
+        st.subheader("Per-source mean end-to-end delay (model)")
+        fig = px.line(per_source(df, "e2e_i", sources), x="iteration", y="e2e_i", color="source",
+                      labels={"iteration": "Iteration",
+                              "e2e_i": "Σ_j λ_ij (D_ij + D_j) / λ_i  (s)"})
+        st.plotly_chart(fig, width="stretch", key="chart_source_delay")
+
+RENDERERS = {"Overview": render_overview, "Brokers": render_brokers, "Routing": render_routing}
 
 # The fragment re-runs on its own every REFRESH_RATE seconds, so each chart
 # key is registered exactly once per run.
