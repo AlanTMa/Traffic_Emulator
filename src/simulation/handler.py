@@ -33,7 +33,7 @@ class SimulationHandler:
     def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None,
                  eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
                  window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9,
-                 rng: np.random.Generator = None):
+                 rng: np.random.Generator = None, latency_log: list = None):
         self.engine = engine
         self.topology = topology
         self.state = state
@@ -56,6 +56,9 @@ class SimulationHandler:
         self.window_arrivals = np.zeros(n_brokers)  # broker arrivals this window
         # End-to-end latencies (source, latency) of requests completed this window
         self.window_latencies = []
+        # Optional caller-owned list receiving (completion_time, source, latency)
+        # for every completed unit, e.g. for exact percentiles in experiments
+        self.latency_log = latency_log
         self.lambda_hat = np.zeros(n_brokers)
         self.prices = np.zeros(n_brokers)
         self.window_idx = 0
@@ -207,6 +210,8 @@ class SimulationHandler:
         latency = self.engine.now - req["arrival"]
         self.state.latency_sum += latency
         self.window_latencies.append((req["source"], latency))
+        if self.latency_log is not None:
+            self.latency_log.append((self.engine.now, req["source"], latency))
         if not self.state.keep_requests:
             del self.state.requests[event.request_id]
 
