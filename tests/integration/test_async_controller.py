@@ -16,8 +16,8 @@ def test_async_controller_convergence():
 
     topo = Topology(lambdas_total, mu_links, mu_brokers, sources, brokers)
 
-    # Start with unbalanced routing: all to SN1
-    x_ij = np.array([[1.0, 0.0], [1.0, 0.0]])
+    # Start with unbalanced routing: all flow to SN1 (rows sum to lambda_i)
+    x_ij = np.array([[0.4, 0.0], [0.4, 0.0]])
 
     engine = SimulationEngine()
     state = SimulationState(2, 2, mu_links, mu_brokers)
@@ -30,13 +30,11 @@ def test_async_controller_convergence():
     # Run for a while to see if routing balances
     engine.run(duration=100.0, handler=handler.handle_event)
 
-    # In a symmetric system, x_ij should converge to 0.5, 0.5 for both
     # Check if routing has shifted away from [1.0, 0.0]
     print(f"\nFinal Routing Matrix:\n{handler.x_ij}")
 
-    # We expect a shift towards balance (0.5, 0.5)
-    for i in range(2):
-        assert handler.x_ij[i, 1] > 0.1, f"Source {i} did not shift routing to SN2"
+    # Symmetric optimum: each source splits its 0.4 evenly across both brokers
+    assert handler.x_ij == pytest.approx(np.full((2, 2), 0.2), abs=1e-3)
 
 if __name__ == "__main__":
     pytest.main([__file__])

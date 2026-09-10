@@ -33,12 +33,12 @@ def render_dashboard():
 
         current_obj = df['objective'].iloc[-1]
         prev_obj = df['objective'].iloc[-2] if len(df) > 1 else current_obj
-        rel_change = abs(current_obj - prev_obj) / (prev_obj if prev_obj != 0 else 1)
+        rel_change = df['rel_change'].iloc[-1]
         max_util = df['max_util'].iloc[-1]
 
         col1.metric("Current Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
         col2.metric("Max Utilization", f"{max_util:.2%}")
-        col3.metric("Rel. Change", f"{rel_change:.2%}")
+        col3.metric("Rel. Change", "—" if pd.isna(rel_change) else f"{rel_change:.2e}")
 
         # Middle Row: Charts
         chart_col1, chart_col2 = st.columns(2)
@@ -54,7 +54,8 @@ def render_dashboard():
             st.subheader("Convergence Rate")
             fig_conv = px.line(df, x='iteration', y='rel_change',
                              labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
-                             title="Relative Change (Convergence Speed)")
+                             title="Relative Change (Convergence Speed)",
+                             log_y=True)
             st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
 
         # Bottom Row: Utilization

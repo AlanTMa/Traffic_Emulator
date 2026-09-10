@@ -39,7 +39,14 @@ def run_simulation(config_path: str):
 
     # Telemetry
     telemetry = TelemetryBuffer()
-    handler = SimulationHandler(engine, topo, state, x_ij, telemetry=telemetry)
+    # float(): PyYAML reads values like 1e-8 (no decimal point) as strings
+    alg_cfg = config.get('algorithm', {})
+    handler = SimulationHandler(
+        engine, topo, state, x_ij, telemetry=telemetry,
+        eta=float(alg_cfg.get('eta', 0.25)),
+        gamma=float(alg_cfg.get('gamma', 0.5)),
+        eps=float(alg_cfg.get('eps', 1e-12)),
+    )
 
     # Initial events: first arrivals for all sources
     for i in range(len(topo.sources)):
