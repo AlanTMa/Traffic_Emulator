@@ -116,7 +116,7 @@ if RUN_CONFIG.exists() and holder["label"]:
 
 # --- Live charts ---
 
-VIEWS = ["Overview", "Brokers", "Routing", "Optimality"]
+VIEWS = ["Overview", "Brokers", "Routing", "Optimality", "Queues & latency"]
 view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
 
 def load_data():
@@ -351,8 +351,51 @@ def render_optimality(df):
                           for key, (label, tol_key) in RESIDUALS.items()])
     st.dataframe(table.style.format({"latest": "{:.3e}", "tolerance": "{:.0e}"}), hide_index=True)
 
+def render_queues(df):
+    if "latency_mean" not in df:
+        st.info("Queue and latency metrics come from the event-driven simulation (windowed_stochastic); "
+                "static_algorithm1 has no packets or queues.")
+        return
+    sources, brokers = node_names(df)
+    last = df.iloc[-1]
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Completed (total)", f"{int(last['completed_total']):,}")
+    col2.metric("Mean latency (run)", f"{last['latency_mean_total']:.4f} s")
+    col3.metric("p95 (last window)", f"{last['latency_p95']:.4f} s")
+    col4.metric("p99 (last window)", f"{last['latency_p99']:.4f} s")
+
+    st.subheader("End-to-end latency per window")
+    lat = df[["iteration", "latency_mean", "latency_p50", "latency_p95", "latency_p99"]].rename(
+        columns={"latency_mean": "mean", "latency_p50": "p50", "latency_p95": "p95", "latency_p99": "p99"})
+    fig = px.line(lat.melt(id_vars="iteration", var_name="statistic", value_name="latency"),
+                  x="iteration", y="latency", color="statistic",
+                  labels={"iteration": "Window", "latency": "Latency (s)"})
+    st.plotly_chart(fig, width="stretch", key="chart_latency")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Per-source mean latency: measured vs model")
+        measured = per_source(df, "latency_mean_i", sources).rename(columns={"latency_mean_i": "latency"})
+        measured["kind"] = "measured"
+        model = per_source(df, "e2e_i", sources).rename(columns={"e2e_i": "latency"})
+        model["kind"] = "model"
+        fig = px.line(pd.concat([measured, model]), x="iteration", y="latency", color="source", line_dash="kind",
+                      labels={"iteration": "Window", "latency": "Latency (s)"})
+        st.plotly_chart(fig, width="stretch", key="chart_source_latency")
+    with col2:
+        st.subheader("Broker queue lengths")
+        fig = px.line(per_broker(df, "queue_broker_j", brokers), x="iteration", y="queue_broker_j", color="broker",
+                      labels={"iteration": "Window", "queue_broker_j": "In system (waiting + in service)"})
+        st.plotly_chart(fig, width="stretch", key="chart_broker_queue")
+
+    st.subheader("Access queue lengths (latest window)")
+    fig = px.imshow(pd.DataFrame(last["queue_access_ij"], index=sources, columns=brokers), text_auto=True,
+                    color_continuous_scale="Oranges", labels={"x": "Broker", "y": "Source", "color": "In system"},
+                    aspect="auto")
+    st.plotly_chart(fig, width="stretch", key="chart_access_queue")
+
 RENDERERS = {"Overview": render_overview, "Brokers": render_brokers, "Routing": render_routing,
-             "Optimality": render_optimality}
+             "Optimality": render_optimality, "Queues & latency": render_queues}
 
 # The fragment re-runs on its own every REFRESH_RATE seconds, so each chart
 # key is registered exactly once per run.

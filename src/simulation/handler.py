@@ -45,6 +45,8 @@ class SimulationHandler:
         # Controller state; the notebook starts both estimates and prices at zero
         n_brokers = len(self.topology.brokers)
         self.window_arrivals = np.zeros(n_brokers)  # broker arrivals this window
+        # End-to-end latencies (source, latency) of requests completed this window
+        self.window_latencies = []
         self.lambda_hat = np.zeros(n_brokers)
         self.prices = np.zeros(n_brokers)
         self.window_idx = 0
@@ -100,7 +102,7 @@ class SimulationHandler:
         # 3. Request tracking
         req_id = self.request_id_counter
         self.request_id_counter += 1
-        self.state.requests[req_id] = {"arrival": self.engine.now}
+        self.state.requests[req_id] = {"arrival": self.engine.now, "source": event.source_id}
 
         # 4. Access queueing
         queue = self.state.access_queues[event.source_id][broker_id]
@@ -193,7 +195,9 @@ class SimulationHandler:
         req = self.state.requests[event.request_id]
         req["broker_complete"] = self.engine.now
         self.state.completed += 1
-        self.state.latency_sum += self.engine.now - req["arrival"]
+        latency = self.engine.now - req["arrival"]
+        self.state.latency_sum += latency
+        self.window_latencies.append((req["source"], latency))
         if not self.state.keep_requests:
             del self.state.requests[event.request_id]
 
@@ -258,4 +262,36 @@ class SimulationHandler:
             # Measured: EWMA of broker arrival rates, as plotted in the notebook
             lambda_hat_j=self.lambda_hat.copy(),
             util_measured_j=self.lambda_hat / self.topology.mu_brokers,
+            **self._queue_and_latency_metrics(),
         ))
+        self.window_latencies = []
+
+    def _queue_and_latency_metrics(self) -> dict:
+        """
+        Queue lengths (number in system: waiting + in service) at the window
+        boundary, and end-to-end latency statistics over requests that
+        completed during the window (NaN when none did).
+        """
+        n_sources, n_brokers = self.x_ij.shape
+        in_system = lambda q: len(q.queue) + int(q.is_busy)
+        queue_access = [[in_system(self.state.access_queues[i][j]) for j in range(n_brokers)]
+                        for i in range(n_sources)]
+        queue_broker = [in_system(self.state.broker_queues[j]) for j in range(n_brokers)]
+
+        sources = np.array([s for s, _ in self.window_latencies], dtype=int)
+        latencies = np.array([l for _, l in self.window_latencies], dtype=float)
+        if latencies.size:
+            p50, p95, p99 = np.percentile(latencies, [50, 95, 99])
+            mean = latencies.mean()
+        else:
+            p50 = p95 = p99 = mean = np.nan
+        mean_i = [latencies[sources == i].mean() if np.any(sources == i) else np.nan for i in range(n_sources)]
+        return {
+            "queue_access_ij": queue_access,
+            "queue_broker_j": queue_broker,
+            "completed_window": int(latencies.size),
+            "completed_total": self.state.completed,
+            "latency_mean": mean, "latency_p50": p50, "latency_p95": p95, "latency_p99": p99,
+            "latency_mean_i": mean_i,
+            "latency_mean_total": self.state.latency_sum / self.state.completed if self.state.completed else np.nan,
+        }
