@@ -12,6 +12,11 @@ class SimulationHandler:
     """
     Processes simulation events and updates the system state.
 
+    Each arrival is one normalized unit of work (see src/model/topology.py):
+    Poisson arrivals at lambda_i units/s, exponential service at mu_ij and
+    mu_j units/s. Recorded "latency" is the end-to-end sojourn time of a
+    work unit (access queue + broker queue), not a message latency.
+
     Controller mode 'windowed_stochastic': the reference notebook's windowed
     stochastic scheme (WiOpt26JNSC_Extended.ipynb, "Windowed Stochastic
     simulation of the DISTRIBUTED pricing scheme"). At the end of every window:
@@ -88,7 +93,7 @@ class SimulationHandler:
             source_id=event.source_id
         ))
 
-        # 2. Route the current packet
+        # 2. Route this work unit
         flows = self.x_ij[event.source_id, :]
         lam_i = np.sum(flows)
         if lam_i > 0:
@@ -99,7 +104,7 @@ class SimulationHandler:
 
         broker_id = np.random.choice(len(self.topology.brokers), p=probs)
 
-        # 3. Request tracking
+        # 3. Work-unit tracking
         req_id = self.request_id_counter
         self.request_id_counter += 1
         self.state.requests[req_id] = {"arrival": self.engine.now, "source": event.source_id}
@@ -269,8 +274,9 @@ class SimulationHandler:
     def _queue_and_latency_metrics(self) -> dict:
         """
         Queue lengths (number in system: waiting + in service) at the window
-        boundary, and end-to-end latency statistics over requests that
-        completed during the window (NaN when none did).
+        boundary, and end-to-end work-unit sojourn-time ("latency")
+        statistics over units that completed during the window (NaN when
+        none did).
         """
         n_sources, n_brokers = self.x_ij.shape
         in_system = lambda q: len(q.queue) + int(q.is_busy)

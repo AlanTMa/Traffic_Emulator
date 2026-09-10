@@ -4,7 +4,7 @@ Random topology generation, using the notebook's capacity distributions.
 import numpy as np
 from src.controller.feasibility import transportation_feasibility
 
-# Notebook (Phase 2) baseline capacity ranges, MB/s
+# Notebook (Phase 2) baseline capacity ranges (MB/s there; normalized work units/s here)
 LINK_CAP_RANGE = (40.0, 60.0)
 BROKER_CAP_RANGE = (100.0, 200.0)
 

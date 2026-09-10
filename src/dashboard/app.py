@@ -111,8 +111,8 @@ if RUN_CONFIG.exists() and holder["label"]:
     with st.expander(f"Topology: {holder['label']}"):
         topo_cfg = yaml.safe_load(RUN_CONFIG.read_text())["topology"]
         src_col, brk_col = st.columns(2)
-        src_col.dataframe(pd.DataFrame(topo_cfg["sources"]).rename(columns={"rate": "rate (pkt/s)"}), hide_index=True)
-        brk_col.dataframe(pd.DataFrame(topo_cfg["brokers"]).rename(columns={"capacity": "capacity (pkt/s)"}), hide_index=True)
+        src_col.dataframe(pd.DataFrame(topo_cfg["sources"]).rename(columns={"rate": "rate (work units/s)"}), hide_index=True)
+        brk_col.dataframe(pd.DataFrame(topo_cfg["brokers"]).rename(columns={"capacity": "capacity (work units/s)"}), hide_index=True)
 
 # --- Live charts ---
 
@@ -232,7 +232,7 @@ def render_brokers(df):
     with col1:
         st.subheader("Broker loads Λ_j")
         fig = px.line(per_broker(df, "load_j", brokers), x="iteration", y="load_j", color="broker",
-                      labels={"iteration": "Iteration", "load_j": "Load (work units/s)"})
+                      labels={"iteration": "Iteration", "load_j": "Load Λ_j (work units/s)"})
         st.plotly_chart(fig, width="stretch", key="chart_broker_load")
     with col2:
         st.subheader("Congestion prices p_j")
@@ -354,22 +354,24 @@ def render_optimality(df):
 def render_queues(df):
     if "latency_mean" not in df:
         st.info("Queue and latency metrics come from the event-driven simulation (windowed_stochastic); "
-                "static_algorithm1 has no packets or queues.")
+                "static_algorithm1 has no events or queues.")
         return
     sources, brokers = node_names(df)
     last = df.iloc[-1]
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Completed (total)", f"{int(last['completed_total']):,}")
+    st.caption("Each event is one normalized unit of work (5x3 instance: 1 unit = 1 MB); latency is the "
+               "end-to-end sojourn time of a work unit, not a message latency.")
+    col1.metric("Work units completed", f"{int(last['completed_total']):,}")
     col2.metric("Mean latency (run)", f"{last['latency_mean_total']:.4f} s")
     col3.metric("p95 (last window)", f"{last['latency_p95']:.4f} s")
     col4.metric("p99 (last window)", f"{last['latency_p99']:.4f} s")
 
-    st.subheader("End-to-end latency per window")
+    st.subheader("End-to-end work-unit sojourn time per window")
     lat = df[["iteration", "latency_mean", "latency_p50", "latency_p95", "latency_p99"]].rename(
         columns={"latency_mean": "mean", "latency_p50": "p50", "latency_p95": "p95", "latency_p99": "p99"})
     fig = px.line(lat.melt(id_vars="iteration", var_name="statistic", value_name="latency"),
                   x="iteration", y="latency", color="statistic",
-                  labels={"iteration": "Window", "latency": "Latency (s)"})
+                  labels={"iteration": "Window", "latency": "Sojourn time (s)"})
     st.plotly_chart(fig, width="stretch", key="chart_latency")
 
     col1, col2 = st.columns(2)
@@ -380,7 +382,7 @@ def render_queues(df):
         model = per_source(df, "e2e_i", sources).rename(columns={"e2e_i": "latency"})
         model["kind"] = "model"
         fig = px.line(pd.concat([measured, model]), x="iteration", y="latency", color="source", line_dash="kind",
-                      labels={"iteration": "Window", "latency": "Latency (s)"})
+                      labels={"iteration": "Window", "latency": "Sojourn time (s)"})
         st.plotly_chart(fig, width="stretch", key="chart_source_latency")
     with col2:
         st.subheader("Broker queue lengths")

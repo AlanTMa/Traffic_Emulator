@@ -6,6 +6,9 @@ Matrices are nested lists indexed [source][broker]; vectors are per source
 evaluated on the controller's routing lambda_ij with the M/M/1 formulas; in
 windowed_stochastic mode that routing is the *planned* split, and measured
 quantities are recorded alongside under their own keys.
+
+Units: rates are normalized work units/s (see src/model/topology.py); the
+latency_* fields are end-to-end sojourn times of one work unit in seconds.
 """
 import time
 import numpy as np

@@ -7,7 +7,7 @@ from src.model.topology import Topology
 import numpy as np
 
 # Controller modes (simulation.controller_mode):
-#   static_algorithm1   - paper Algorithm 1 on the analytic model: no packets or
+#   static_algorithm1   - paper Algorithm 1 on the analytic model: no events or
 #                         queues; every iterate keeps Lambda_j <= mu_j - delta_s
 #                         through the common safe step.
 #   windowed_stochastic - event-driven queues driven by the reference notebook's

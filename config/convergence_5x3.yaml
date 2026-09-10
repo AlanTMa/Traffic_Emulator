@@ -1,4 +1,4 @@
-# Static distributed solver on the 5x3 baseline (no packets): reproduces the
+# Static Algorithm 1 on the 5x3 baseline (no events or queues): reproduces the
 # notebook's convergence plots (dashboard_*.png). One iteration per window.
 simulation:
   duration: 100   # 100 iterations at window=1s
@@ -13,6 +13,7 @@ algorithm:
 
 topology:
   # Exact seed-42 instance from the reference notebook (cells 0-2), MB/s.
+  # The event simulator reads these as normalized work units/s, 1 unit = 1 MB.
   # Rates: sum over topics of msg/s x size, / 1024 (e.g. P2 = 30780/1024).
   sources:
     - {id: "P0", rate: 0.15625}

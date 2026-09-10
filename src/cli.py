@@ -95,14 +95,14 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     # 5. Final Results
     print("\n=== Simulation Complete ===")
     if state.completed:
-        print(f"Processed {state.completed} requests.")
-        print(f"Mean End-to-End Latency: {state.latency_sum / state.completed:.4f}s")
+        print(f"Completed {state.completed} work units.")
+        print(f"Mean end-to-end work-unit sojourn time: {state.latency_sum / state.completed:.4f}s")
     else:
-        print("No requests completed during the simulation.")
+        print("No work units completed during the simulation.")
 
 def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
     """
-    static_algorithm1: paper Algorithm 1 on the analytic model (no packets),
+    static_algorithm1: paper Algorithm 1 on the analytic model (no events or queues),
     one iteration per window. Reproduces the notebook's static convergence plots.
     """
     eta = float(alg_cfg.get('eta', 0.25))
