@@ -90,6 +90,11 @@ class Topology:
             bad = [self.brokers[j] for j in np.where(self.mu_brokers <= 0)[0]]
             raise ValueError(f"broker capacities must be > 0 (not for {bad})")
 
+    def with_capacities(self, mu_links: np.ndarray, mu_brokers: np.ndarray) -> "Topology":
+        """Same sources, rates, ids and route mask with new capacities (validated)."""
+        return Topology(self.lambdas_total, mu_links, mu_brokers, self.sources, self.brokers,
+                        route_mask=self.route_mask)
+
     @property
     def n_sources(self) -> int:
         return len(self.sources)

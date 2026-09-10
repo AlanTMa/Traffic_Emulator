@@ -298,6 +298,13 @@ def render_brokers(df):
                       labels={"iteration": "Iteration", "price_j": "Price p_j"})
         st.plotly_chart(fig, width="stretch", key="chart_broker_price")
 
+    if "mu_brokers_t" in df:
+        # dynamics.capacity_variation: capacities in effect at each window
+        st.subheader("Broker capacities μ_j(t)")
+        fig = px.line(per_broker(df, "mu_brokers_t", brokers), x="iteration", y="mu_brokers_t", color="broker",
+                      labels={"iteration": "Iteration", "mu_brokers_t": "Capacity (work units/s)"})
+        st.plotly_chart(fig, width="stretch", key="chart_broker_capacity")
+
     last = df.iloc[-1]
     table = pd.DataFrame({"load Λ_j": last["load_j"], "utilization": last["util_j"], "price p_j": last["price_j"]},
                          index=brokers)

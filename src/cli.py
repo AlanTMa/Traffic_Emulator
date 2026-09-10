@@ -11,6 +11,7 @@ import yaml
 from pathlib import Path
 from src.model.config import CONTROLLER_MODES, controller_mode, load_config, topology_from_config
 from src.model.generate import generate_topology_config
+from src.model.dynamics import CapacityVariation
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
@@ -43,14 +44,22 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     # No duration: run until stopped (Ctrl+C, or Stop in the dashboard)
     duration = float(sim_cfg.get('duration', 'inf'))
 
+    # Optional time-varying capacities (dynamics.capacity_variation); topo is
+    # then the topology in effect at t = 0
+    mode = controller_mode(config)
+    seed = resolve_seed(config)
+    base_topo = topo
+    capacity_model = CapacityVariation.from_config(config, topo, seed)
+    if capacity_model is not None:
+        topo = capacity_model.topology_at(0.0)
+        print(f"Time-varying capacities: link {capacity_model.link}, broker {capacity_model.broker}")
+
     # 2. Initialization
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
     output_dir = Path(output_dir)
     telemetry = TelemetryBuffer(path=output_dir / "metrics.jsonl")
     print(f"Writing telemetry to {output_dir / 'metrics.jsonl'}")
 
-    mode = controller_mode(config)
-    seed = resolve_seed(config)
     if mode in ('static_algorithm1', 'capacity_safe_event_driven'):
         params = {"eta": float(alg_cfg.get('eta', 0.25)), "gamma": float(alg_cfg.get('gamma', 0.5)),
                   "delta_s": float(alg_cfg.get('delta_s', 1e-8)),   # Algorithm 1 capacity margin
@@ -62,7 +71,7 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
         params = {"eta": float(alg_cfg.get('eta', 0.35)), "gamma": float(alg_cfg.get('gamma', 0.5)),
                   "beta": float(alg_cfg.get('beta', 0.3)), "delta_s": None,   # no safe step in this mode
                   "window": window, "warmup": int(sim_cfg.get('warmup', 4))}
-    write_run_metadata(output_dir, config, topo, seed=seed, controller_mode=mode, real_time=real_time,
+    write_run_metadata(output_dir, config, base_topo, seed=seed, controller_mode=mode, real_time=real_time,
                        parameters=params, config_path=config_path)
     print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}; seed: {seed}")
     if np.isinf(duration):
@@ -71,7 +80,7 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
         print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.", flush=True)
 
     if mode == 'static_algorithm1':
-        run_static(topo, params, duration, telemetry, real_time)
+        run_static(topo, params, duration, telemetry, real_time, capacity_model)
         telemetry.close()
         return
 
@@ -87,14 +96,14 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
             engine, topo, state, x_ij, telemetry=telemetry,
             eta=params["eta"], gamma=params["gamma"], beta=params["beta"], window=window,
             eps=params["eps"], delta_s=params["delta_s"], controller_mode=mode,
-            rng=np.random.default_rng(seed),
+            rng=np.random.default_rng(seed), capacity_model=capacity_model,
         )
     else:
         handler = SimulationHandler(
             engine, topo, state, x_ij, telemetry=telemetry,
             eta=params["eta"], gamma=params["gamma"], beta=params["beta"],
             window=window, warmup_windows=params["warmup"],
-            rng=np.random.default_rng(seed),
+            rng=np.random.default_rng(seed), capacity_model=capacity_model,
         )
 
     # Initial events: first arrivals for all sources
@@ -126,7 +135,7 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     else:
         print("No work units completed during the simulation.")
 
-def run_static(topo, params, duration, telemetry, real_time):
+def run_static(topo, params, duration, telemetry, real_time, capacity_model=None):
     """
     static_algorithm1: paper Algorithm 1 on the analytic model (no events or queues),
     one iteration per window. Reproduces the notebook's static convergence plots.
@@ -145,11 +154,16 @@ def run_static(topo, params, duration, telemetry, real_time):
         if real_time:
             time.sleep(max(0.0, wall_start + k * window - time.perf_counter()))
 
-        state, _, residual = iteration_step(state, topo, eta, gamma, eps=eps, delta_s=delta_s)
+        if capacity_model is not None:
+            topo = capacity_model.topology_at(k * window)   # capacities for this iteration
+        state, _, residual = iteration_step(state, topo, eta, gamma, eps=eps, delta_s=delta_s,
+                                            on_best_response_failure="hold" if capacity_model else "raise")
+        extra = ({"mu_links_t": topo.mu_links, "mu_brokers_t": topo.mu_brokers,
+                  "br_failures": list(state.br_failures)} if capacity_model is not None else {})
         record = controller_snapshot(
             topo, state.lambda_ij, state.prices, iteration=k, sim_time=k * window,
             controller_mode="static_algorithm1", s_j=state.s_j, s_t=state.s_t,
-            route_rel=state.route_rel, price_rel=state.price_rel, eps=eps)
+            route_rel=state.route_rel, price_rel=state.price_rel, eps=eps, **extra)
         telemetry.record(record)
 
     print("\n=== Static Solve Complete ===")

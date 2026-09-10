@@ -48,9 +48,14 @@ class SimulationHandler:
                  eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
                  window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9,
                  rng: np.random.Generator = None, latency_log: list = None,
-                 controller_mode: str = "windowed_stochastic", delta_s: float = 1e-8):
+                 controller_mode: str = "windowed_stochastic", delta_s: float = 1e-8,
+                 capacity_model=None):
         self.engine = engine
+        # Current topology. With a capacity_model (src/model/dynamics.py) it is
+        # replaced at every window boundary by the capacities in effect then;
+        # `topology` is the one in effect at t = 0.
         self.topology = topology
+        self.capacity_model = capacity_model
         self.state = state
         self.x_ij = x_ij # Current routing flows (rows sum to lambda_i)
         self.request_id_counter = 0
@@ -264,6 +269,10 @@ class SimulationHandler:
             queue.is_busy = False
 
     def _handle_controller_tick(self, event: Event):
+        # Capacities for the window starting now (service, controller, diagnostics)
+        if self.capacity_model is not None:
+            self.topology = self.capacity_model.topology_at(self.engine.now)
+
         # Measured EWMA of broker arrival rates over the window just closed
         inst_rate = self.window_arrivals / self.window
         # Raw (unsmoothed) measured rates of the window, recorded in telemetry
@@ -301,8 +310,10 @@ class SimulationHandler:
                 try:
                     x_br = best_response_available(self.topology.mu_links[i, :], self.prices,
                                              self.topology.lambdas_total[i])
-                except RuntimeError:
-                    self.br_failures.append(i)  # keep the current split; recorded in telemetry
+                except (RuntimeError, ValueError):
+                    # Solver failure, or demand the current access capacities cannot
+                    # carry: keep the current split; recorded in telemetry
+                    self.br_failures.append(i)
                     continue
                 self.x_ij[i, :] = (1.0 - self.eta) * self.x_ij[i, :] + self.eta * x_br
 
@@ -331,6 +342,8 @@ class SimulationHandler:
             iteration=self.window_idx, sim_time=self.engine.now, controller_mode=self.controller_mode,
             s_j=self.s_j, s_t=self.s_t, route_rel=route_rel, price_rel=price_rel,
             br_failures=list(self.br_failures), br_failures_total=self.br_failures_total,
+            **({"mu_links_t": self.topology.mu_links, "mu_brokers_t": self.topology.mu_brokers}
+               if self.capacity_model is not None else {}),
             # Measured: EWMA of broker arrival rates, as plotted in the notebook
             lambda_hat_j=self.lambda_hat.copy(),
             util_measured_j=self.lambda_hat / self.topology.mu_brokers,

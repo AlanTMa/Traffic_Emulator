@@ -57,10 +57,12 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     guards divisions against zero and is not a modeling parameter.
 
     on_best_response_failure: "raise" (default) propagates a best-response
-    solver failure; "hold" keeps that source's current split for this step
-    (its Delta_ij = 0, so the safe step still bounds the others) and lists
-    the source index in state.br_failures, for long event runs that must
-    record, not hide, such failures.
+    failure; "hold" keeps that source's current split for this step (its
+    Delta_ij = 0, so the safe step still bounds the others) and lists the
+    source index in state.br_failures, for long event runs that must record,
+    not hide, such failures. Failures are solver non-convergence
+    (RuntimeError) or a source whose demand its access links cannot carry
+    under the current capacities (ValueError, e.g. after a capacity drop).
     """
     if on_best_response_failure not in ("raise", "hold"):
         raise ValueError(f"on_best_response_failure must be 'raise' or 'hold', not {on_best_response_failure!r}")
@@ -83,7 +85,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
                 new_prices,
                 topology.lambdas_total[i]
             )
-        except RuntimeError:
+        except (RuntimeError, ValueError):
             if on_best_response_failure == "raise":
                 raise
             lambda_br[i, :] = state.lambda_ij[i, :]
