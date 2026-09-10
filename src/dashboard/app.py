@@ -30,10 +30,22 @@ RUN_DIR = PROJECT_ROOT / "runs"
 # TRAFFIC_EMULATOR_OUTPUT_DIR (e.g. to view another run without touching runs/latest)
 OUTPUT_DIR = Path(os.environ.get("TRAFFIC_EMULATOR_OUTPUT_DIR", RUN_DIR / "latest"))
 METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema: src/telemetry/schema.py)
-RUN_CONFIG = RUN_DIR / "dashboard_run.yaml"
-RUN_LOG = RUN_DIR / "dashboard_run.log"
+# The launched config and CLI log live with the run they belong to
+RUN_CONFIG = OUTPUT_DIR / "dashboard_config.yaml"
+RUN_LOG = OUTPUT_DIR / "dashboard.log"
 REFRESH_RATE = 2 # seconds
 MAX_ROWS = 3000  # most recent iterations kept for plotting
+
+MODE_HELP = {  # controller_mode -> (label, description)
+    "windowed_stochastic": ("Windowed stochastic (notebook)",
+                            "event-driven queues; prices from the measured EWMA load, inertial splits; "
+                            "no safe step, no per-iteration capacity guarantee"),
+    "capacity_safe_event_driven": ("Capacity-safe event-driven (Algorithm 1)",
+                                   "event-driven queues; planned routing advanced by exact Algorithm 1 "
+                                   "steps; planned Λ_j ≤ μ_j − δ_s at every update"),
+    "static_algorithm1": ("Static Algorithm 1 (no queues)",
+                          "Algorithm 1 on the analytic model; no events or queues"),
+}
 
 # --- Simulation process management ---
 
@@ -57,7 +69,7 @@ def stop_simulation(holder: dict):
 
 def launch_simulation(holder: dict, config: dict, label: str):
     stop_simulation(holder)
-    RUN_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     RUN_CONFIG.write_text(yaml.safe_dump(config, sort_keys=False))
     METRICS_FILE.unlink(missing_ok=True)  # start the charts from scratch
     holder["log"] = open(RUN_LOG, "w")
@@ -81,13 +93,21 @@ with st.sidebar:
         load = st.slider("Target load", 0.05, 0.90, 0.30, 0.05,
                          help="Total offered rate as a fraction of total broker capacity")
         seed = st.number_input("Seed", min_value=0, value=42, step=1)
+        mode = st.selectbox("Controller mode", list(MODE_HELP), format_func=lambda m: MODE_HELP[m][0],
+                            help="\n\n".join(f"**{label}**: {text}" for label, text in MODE_HELP.values()))
+        algorithm1 = mode != "windowed_stochastic"
         with st.expander("Controller parameters"):
             window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5,
                                      help="Seconds per controller iteration")
-            warmup = st.number_input("Warm-up windows", 0, 100, 4)
-            eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
-            gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
-            beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
+            if algorithm1:
+                eta = st.slider("eta (Algorithm 1 step size)", 0.01, 1.0, 0.25)
+                gamma = st.slider("gamma (price damping)", 0.01, 1.0, 0.50)
+                delta_s = st.number_input("delta_s (capacity margin)", 0.0, 1.0, 1e-8, format="%.1e")
+            else:
+                warmup = st.number_input("Warm-up windows", 0, 100, 4)
+                eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
+                gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
+                beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
     else:
         config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
         config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
@@ -96,12 +116,15 @@ with st.sidebar:
     if launch_col.button("Launch", type="primary", width="stretch"):
         try:
             if topology_source == "Generate":
-                config = {
-                    "simulation": {"window": window, "warmup": int(warmup), "controller_mode": "windowed_stochastic",
-                                   "seed": int(seed)},
-                    "algorithm": {"eta": eta, "gamma": gamma, "beta": beta},
-                    "topology": generate_topology_config(n_sources, n_brokers, load, int(seed)),
-                }
+                if algorithm1:
+                    simulation = {"window": window, "controller_mode": mode, "seed": int(seed)}
+                    algorithm = {"eta": eta, "gamma": gamma, "delta_s": float(delta_s), "eps": 1e-12}
+                else:
+                    simulation = {"window": window, "warmup": int(warmup), "controller_mode": mode,
+                                  "seed": int(seed)}
+                    algorithm = {"eta": eta, "gamma": gamma, "beta": beta}
+                config = {"simulation": simulation, "algorithm": algorithm,
+                          "topology": generate_topology_config(n_sources, n_brokers, load, int(seed))}
                 label = f"Generated {n_sources}×{n_brokers}, load {load:.0%}, seed {seed}"
             else:
                 config = load_config(config_file)
@@ -206,6 +229,8 @@ def per_route(df, column, sources, brokers):
 def render_status(df):
     proc = holder["proc"]
     progress = f" · iteration {int(df['iteration'].iloc[-1])}, t = {df['timestamp'].iloc[-1]:.0f}s" if df is not None and not df.empty else ""
+    if df is not None and not df.empty:
+        progress += f" · {MODE_HELP.get(df['controller_mode'].iloc[-1], (df['controller_mode'].iloc[-1],))[0]}"
     if is_running(holder):
         st.success(f"Running: {holder['label']}{progress}")
     elif proc is not None:
@@ -327,6 +352,9 @@ def render_optimality(df):
     if last["controller_mode"] == "windowed_stochastic":
         st.caption("windowed_stochastic prices follow noisy measured rates, so price consistency and the "
                    "fixed point are not expected to hold exactly.")
+    elif last["controller_mode"] == "capacity_safe_event_driven":
+        st.caption("The certificate refers to the planned routing and model prices of the Algorithm 1 "
+                   "controller. Measured queues and sojourn times are in 'Queues & latency'.")
 
     # Total marginal cost per route; unused routes (in the latest state) dotted
     st.subheader("Total marginal cost C_ij + C_j")
