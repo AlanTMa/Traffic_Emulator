@@ -1,5 +1,6 @@
 import atexit
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,9 @@ st.markdown("Set up a topology in the sidebar and launch a simulation; charts up
 
 # Configuration
 RUN_DIR = PROJECT_ROOT / "runs"
-OUTPUT_DIR = RUN_DIR / "latest"
+# Output directory the dashboard launches into and reads from; override with
+# TRAFFIC_EMULATOR_OUTPUT_DIR (e.g. to view another run without touching runs/latest)
+OUTPUT_DIR = Path(os.environ.get("TRAFFIC_EMULATOR_OUTPUT_DIR", RUN_DIR / "latest"))
 METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema: src/telemetry/schema.py)
 RUN_CONFIG = RUN_DIR / "dashboard_run.yaml"
 RUN_LOG = RUN_DIR / "dashboard_run.log"
@@ -154,6 +157,26 @@ def node_names(df):
         pass
     return [f"P{i}" for i in range(n_sources)], [f"SN{j + 1}" for j in range(n_brokers)]
 
+def log_axis(fig, values):
+    """
+    Readable log y-axis. Plotly's default labels intermediate ticks as bare
+    "2" and "5" (and uses SI prefixes like 1μ), so a decade axis reads
+    1, 5, 2, 0.1, 5, 2, ... Label only powers of ten when the data span two
+    or more decades (unlabeled minor gridlines in between); otherwise keep
+    automatic ticks but print full values.
+    """
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v) & (v > 0)]
+    decades = np.log10(v.max() / v.min()) if v.size else 0.0
+    if decades >= 2:
+        # At most ~7 labels; minor gridlines only while they stay sparse
+        step = int(np.ceil(decades / 7))
+        fig.update_yaxes(dtick=step, exponentformat="power", showexponent="all",
+                         minor=dict(showgrid=bool(decades <= 6), ticks=""))
+    else:
+        fig.update_yaxes(tickformat=".2~g")
+    return fig
+
 def per_broker(df, column, brokers):
     """Long-form frame (iteration, broker, value) from a per-broker list column."""
     values = np.array(df[column].tolist(), dtype=float)
@@ -212,6 +235,7 @@ def render_overview(df):
         fig_conv = px.line(df, x='iteration', y='rel_change',
                            labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
                            title="Relative Change (Convergence Speed)", log_y=True)
+        log_axis(fig_conv, df['rel_change'])
         st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
 
 def render_brokers(df):
@@ -310,6 +334,7 @@ def render_optimality(df):
                   line_dash_map={"used": "solid", "unused": "dot"},
                   labels={"iteration": "Iteration", "M_ij": "C_ij + C_j"})
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+    log_axis(fig, marg["M_ij"])
     st.plotly_chart(fig, width="stretch", key="chart_marginal_cost")
 
     col1, col2 = st.columns(2)
@@ -328,6 +353,7 @@ def render_optimality(df):
         fig.add_scatter(x=sources, y=last["alpha_i"], mode="markers", name="α_i",
                         marker=dict(symbol="line-ew-open", size=28, color="black"))
         fig.update_traces(marker_size=11, selector=dict(mode="markers", type="scatter"))
+        log_axis(fig, current["M_ij"])
         st.plotly_chart(fig, width="stretch", key="chart_kkt")
     with col2:
         st.subheader("Common safe step s_t")
@@ -350,6 +376,7 @@ def render_optimality(df):
     fig = px.line(resid.melt(id_vars="iteration", var_name="residual", value_name="value"),
                   x="iteration", y="value", color="residual", log_y=True,
                   labels={"iteration": "Iteration", "value": f"Residual (zeros drawn at {floor:g})"})
+    log_axis(fig, resid.drop(columns="iteration").to_numpy().ravel())
     st.plotly_chart(fig, width="stretch", key="chart_residuals")
     table = pd.DataFrame([{"residual": label, "latest": last[key], "tolerance": DEFAULT_TOLERANCES[tol_key],
                            "pass": bool(abs(last[key]) <= DEFAULT_TOLERANCES[tol_key])}
