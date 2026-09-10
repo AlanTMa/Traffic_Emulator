@@ -49,11 +49,13 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
 
     mode = controller_mode(config)
     seed = resolve_seed(config)
-    if mode == 'static_algorithm1':
+    if mode in ('static_algorithm1', 'capacity_safe_event_driven'):
         params = {"eta": float(alg_cfg.get('eta', 0.25)), "gamma": float(alg_cfg.get('gamma', 0.5)),
                   "delta_s": float(alg_cfg.get('delta_s', 1e-8)),   # Algorithm 1 capacity margin
                   "eps": float(alg_cfg.get('eps', 1e-12)),          # numerical guard only
                   "window": window}
+        if mode == 'capacity_safe_event_driven':
+            params["beta"] = float(alg_cfg.get('beta', 0.3))       # measured-rate telemetry only
     else:
         params = {"eta": float(alg_cfg.get('eta', 0.35)), "gamma": float(alg_cfg.get('gamma', 0.5)),
                   "beta": float(alg_cfg.get('beta', 0.3)), "delta_s": None,   # no safe step in this mode
@@ -75,12 +77,23 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     engine = SimulationEngine()
     state = SimulationState(len(topo.sources), len(topo.brokers), topo.mu_links, topo.mu_brokers,
                             keep_requests=False)
-    handler = SimulationHandler(
-        engine, topo, state, x_ij, telemetry=telemetry,
-        eta=params["eta"], gamma=params["gamma"], beta=params["beta"],
-        window=window, warmup_windows=params["warmup"],
-        rng=np.random.default_rng(seed),
-    )
+    if mode == 'capacity_safe_event_driven':
+        # Algorithm 1 on planned rates; initial routing from the LP with margin delta_s
+        x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers,
+                                          margin=params["delta_s"])
+        handler = SimulationHandler(
+            engine, topo, state, x_ij, telemetry=telemetry,
+            eta=params["eta"], gamma=params["gamma"], beta=params["beta"], window=window,
+            eps=params["eps"], delta_s=params["delta_s"], controller_mode=mode,
+            rng=np.random.default_rng(seed),
+        )
+    else:
+        handler = SimulationHandler(
+            engine, topo, state, x_ij, telemetry=telemetry,
+            eta=params["eta"], gamma=params["gamma"], beta=params["beta"],
+            window=window, warmup_windows=params["warmup"],
+            rng=np.random.default_rng(seed),
+        )
 
     # Initial events: first arrivals for all sources
     for i in range(len(topo.sources)):

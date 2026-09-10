@@ -5,6 +5,7 @@ import numpy as np
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
 from src.controller.best_response import best_response_mm1
+from src.controller.synchronous import algorithm1_initial_state, iteration_step
 from src.telemetry.metrics import TelemetryBuffer
 from src.telemetry.schema import controller_snapshot
 
@@ -29,11 +30,25 @@ class SimulationHandler:
     broker loads carry no per-iteration capacity guarantee, and prices track
     noisy measurements rather than C_j(Lambda_j). All sources update at one
     global window barrier; it is not an asynchronous controller.
+
+    Controller mode 'capacity_safe_event_driven': the same event-driven
+    queues, but at every window boundary the planned routing is advanced by
+    exactly one step of paper Algorithm 1 (synchronous.iteration_step, the
+    function static_algorithm1 uses) on the PLANNED rates: prices damp toward
+    C_j(planned Lambda_j), sources best-respond, and the common safe step
+    keeps planned Lambda_j <= mu_j - delta_s. Measured arrivals, EWMA rates,
+    queues and sojourn times are recorded but never enter the controller
+    (feeding them in would turn it back into the windowed scheme). There is
+    no warm-up (Algorithm 1 starts from its LP initializer and model prices)
+    and beta only smooths the measured-rate telemetry. It is synchronous too.
     """
+    CONTROLLER_MODES = ("windowed_stochastic", "capacity_safe_event_driven")
+
     def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None,
                  eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
                  window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9,
-                 rng: np.random.Generator = None, latency_log: list = None):
+                 rng: np.random.Generator = None, latency_log: list = None,
+                 controller_mode: str = "windowed_stochastic", delta_s: float = 1e-8):
         self.engine = engine
         self.topology = topology
         self.state = state
@@ -62,6 +77,23 @@ class SimulationHandler:
         self.lambda_hat = np.zeros(n_brokers)
         self.prices = np.zeros(n_brokers)
         self.window_idx = 0
+
+        if controller_mode not in self.CONTROLLER_MODES:
+            raise ValueError(f"controller_mode must be one of {self.CONTROLLER_MODES}, not {controller_mode!r}")
+        self.controller_mode = controller_mode
+        self.delta_s = delta_s
+        self.s_j, self.s_t = None, np.nan            # Algorithm 1 step of the last window
+        self.br_failures = []                        # sources whose best response failed last window
+        self.br_failures_total = 0
+        if controller_mode == "capacity_safe_event_driven":
+            # Algorithm 1 state on planned rates; x_ij must satisfy
+            # Lambda_j <= mu_j - delta_s (e.g. LP initializer with margin delta_s)
+            planned = self.x_ij.sum(axis=0)
+            if np.any(planned > self.topology.mu_brokers - delta_s):
+                raise ValueError("initial routing violates Lambda_j <= mu_j - delta_s")
+            self.controller_state = algorithm1_initial_state(topology, delta_s, eps, initial_lambda=self.x_ij)
+            self.x_ij = self.controller_state.lambda_ij
+            self.prices = self.controller_state.prices.copy()
 
         # Telemetry
         self.telemetry = telemetry
@@ -230,24 +262,16 @@ class SimulationHandler:
             queue.is_busy = False
 
     def _handle_controller_tick(self, event: Event):
-        mu_j = self.topology.mu_brokers
-
-        # 1. Brokers: EWMA of measured arrival rate -> damped price
+        # Measured EWMA of broker arrival rates over the window just closed
         inst_rate = self.window_arrivals / self.window
         self.window_arrivals[:] = 0
         self.lambda_hat = (1.0 - self.beta) * self.lambda_hat + self.beta * inst_rate
-        p_inst = mu_j / np.maximum(mu_j - self.lambda_hat, 1e-6)**2
-        self.prices = (1.0 - self.gamma) * self.prices + self.gamma * p_inst
 
-        # 2. Sources: after warm-up, move each split toward its best response
-        if self.window_idx >= self.warmup_windows:
-            for i in range(len(self.topology.sources)):
-                try:
-                    x_br = best_response_mm1(self.topology.mu_links[i, :], self.prices,
-                                             self.topology.lambdas_total[i])
-                except RuntimeError:
-                    continue  # keep the current split if the solver fails
-                self.x_ij[i, :] = (1.0 - self.eta) * self.x_ij[i, :] + self.eta * x_br
+        if self.controller_mode == "capacity_safe_event_driven":
+            self._algorithm1_update()
+        else:
+            self._windowed_update()
+        self.br_failures_total += len(self.br_failures)
 
         self.window_idx += 1
         if self.telemetry:
@@ -257,6 +281,33 @@ class SimulationHandler:
             timestamp=self.engine.now + self.window,
             event_type=EventType.CONTROLLER_TICK
         ))
+
+    def _windowed_update(self):
+        """Notebook windowed scheme: prices from the measured EWMA, inertial splits."""
+        mu_j = self.topology.mu_brokers
+        p_inst = mu_j / np.maximum(mu_j - self.lambda_hat, 1e-6)**2
+        self.prices = (1.0 - self.gamma) * self.prices + self.gamma * p_inst
+
+        # After warm-up, move each split toward its best response
+        self.br_failures = []
+        if self.window_idx >= self.warmup_windows:
+            for i in range(len(self.topology.sources)):
+                try:
+                    x_br = best_response_mm1(self.topology.mu_links[i, :], self.prices,
+                                             self.topology.lambdas_total[i])
+                except RuntimeError:
+                    self.br_failures.append(i)  # keep the current split; recorded in telemetry
+                    continue
+                self.x_ij[i, :] = (1.0 - self.eta) * self.x_ij[i, :] + self.eta * x_br
+
+    def _algorithm1_update(self):
+        """One exact Algorithm 1 step on the planned rates (shared with static_algorithm1)."""
+        state, _, _ = iteration_step(self.controller_state, self.topology, self.eta, self.gamma,
+                                     eps=self.eps, delta_s=self.delta_s, on_best_response_failure="hold")
+        # New arrivals are routed with probabilities lambda_ij / lambda_i of the updated plan
+        self.x_ij = state.lambda_ij
+        self.prices = state.prices.copy()
+        self.s_j, self.s_t, self.br_failures = state.s_j.copy(), state.s_t, list(state.br_failures)
 
     def _record_telemetry(self):
         # Relative routing and price change since the last window (same
@@ -268,11 +319,12 @@ class SimulationHandler:
         self.prev_x_ij = self.x_ij.copy()
         self.prev_prices = self.prices.copy()
 
-        # Model quantities on the planned split; no safe step in this mode
+        # Model quantities on the planned split; s_j/s_t only in the Algorithm 1 mode
         self.telemetry.record(controller_snapshot(
             self.topology, self.x_ij, self.prices,
-            iteration=self.window_idx, sim_time=self.engine.now, controller_mode="windowed_stochastic",
-            route_rel=route_rel, price_rel=price_rel,
+            iteration=self.window_idx, sim_time=self.engine.now, controller_mode=self.controller_mode,
+            s_j=self.s_j, s_t=self.s_t, route_rel=route_rel, price_rel=price_rel,
+            br_failures=list(self.br_failures), br_failures_total=self.br_failures_total,
             # Measured: EWMA of broker arrival rates, as plotted in the notebook
             lambda_hat_j=self.lambda_hat.copy(),
             util_measured_j=self.lambda_hat / self.topology.mu_brokers,

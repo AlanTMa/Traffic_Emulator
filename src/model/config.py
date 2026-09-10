@@ -14,7 +14,12 @@ import numpy as np
 #                         windowed stochastic scheme (EWMA of measured arrival
 #                         rates, damped prices, split inertia). No safe step:
 #                         no per-iteration capacity guarantee.
-CONTROLLER_MODES = ("static_algorithm1", "windowed_stochastic")
+#   capacity_safe_event_driven - the same event-driven queues, with the planned
+#                         routing advanced by one exact Algorithm 1 step per
+#                         window (same function as static_algorithm1): planned
+#                         Lambda_j <= mu_j - delta_s at every update. Measured
+#                         quantities are recorded, never used for control.
+CONTROLLER_MODES = ("static_algorithm1", "windowed_stochastic", "capacity_safe_event_driven")
 _LEGACY_MODES = {"static": "static_algorithm1", "synchronous": "windowed_stochastic",
                  "asynchronous": "windowed_stochastic"}
 
