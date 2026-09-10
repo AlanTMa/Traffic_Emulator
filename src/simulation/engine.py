@@ -29,19 +29,20 @@ class SimulationEngine:
             handler: A callback function that processes each event.
             real_time: If True, pace the simulation to match the wall clock.
         """
-        last_event_time = 0.0
-        while self.event_queue and self.now < duration:
+        # Wall-clock time corresponding to simulated time zero. Sleeping until
+        # start + timestamp (rather than for each inter-event gap) keeps handler
+        # time and sleep overshoot from accumulating as drift.
+        wall_start = time.perf_counter() - self.now
+        while self.event_queue and self.event_queue[0].timestamp <= duration:
             event = heapq.heappop(self.event_queue)
 
             if real_time:
-                # Calculate time jump and sleep to match real-world clock
-                delta = event.timestamp - last_event_time
-                if delta > 0:
-                    time.sleep(delta)
+                delay = wall_start + event.timestamp - time.perf_counter()
+                if delay > 0:
+                    time.sleep(delay)
 
             self.now = event.timestamp
             handler(event)
-            last_event_time = self.now
 
     def stop(self):
         """Clear the queue to stop the simulation."""
