@@ -102,8 +102,11 @@ def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
     """
     eta = float(alg_cfg.get('eta', 0.25))
     gamma = float(alg_cfg.get('gamma', 0.5))
-    eps = float(alg_cfg.get('eps', 1e-12))
+    eps = float(alg_cfg.get('eps', 1e-12))          # numerical guard only
+    delta_s = float(alg_cfg.get('delta_s', 1e-8))   # Algorithm 1 capacity margin
 
+    # Algorithm 1 requires an initial routing with Lambda_j <= mu_j - delta_s
+    x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers, margin=delta_s)
     loads = x_ij.sum(axis=0)
     state = SystemState(lambda_ij=x_ij, prices=mm1_marginal_cost_vectorized(loads, topo.mu_brokers, eps))
     wall_start = time.perf_counter()
@@ -116,7 +119,7 @@ def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
         if real_time:
             time.sleep(max(0.0, wall_start + k * window - time.perf_counter()))
 
-        state, _, residual = iteration_step(state, topo, eta, gamma, eps)
+        state, _, residual = iteration_step(state, topo, eta, gamma, eps=eps, delta_s=delta_s)
         L = state.lambda_ij
         L_j = L.sum(axis=0)
         obj = np.sum(L / (topo.mu_links - L)) + np.sum(L_j / (topo.mu_brokers - L_j))

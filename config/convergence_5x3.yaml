@@ -8,7 +8,8 @@ simulation:
 algorithm:
   gamma: 0.5
   eta: 0.25
-  eps: 1e-12
+  delta_s: 1.0e-8   # capacity margin kept by the safe step (paper / notebook)
+  eps: 1.0e-12      # numerical guard against division by zero
 
 topology:
   sources:

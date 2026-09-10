@@ -20,28 +20,33 @@ def update_prices(current_prices: np.ndarray, loads: np.ndarray, mu_brokers: np.
     return (1.0 - gamma) * current_prices + gamma * p_hat
 
 def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
-                      eta: float, eps: float = 1e-12) -> float:
+                      eta: float, delta_s: float = 1e-8) -> float:
     """
-    Common safe step s_t of Algorithm 1 (capacity margin eps).
+    Common safe step s_t of Algorithm 1, with capacity margin delta_s.
 
     With Delta_j = sum_i (lambda_br_ij - lambda_ij), for every broker with Delta_j > 0:
-        s_j = min(1, (mu_j - eps - Lambda_j) / (eta * Delta_j))
+        s_j = min(1, (mu_j - delta_s - Lambda_j) / (eta * Delta_j))
     and s_j = 1 otherwise; s_t = min_j s_j. The routing update then moves by
-    eta * s_t, so Lambda_j + eta * s_t * Delta_j <= mu_j - eps for every j.
+    eta * s_t, so Lambda_j + eta * s_t * Delta_j <= mu_j - delta_s for every j.
     """
     load_direction = (lambda_br - lambda_ij).sum(axis=0)
 
     s_t = 1.0
     for j in range(len(mu_brokers)):
         if load_direction[j] > 0:
-            s_j = (mu_brokers[j] - eps - loads[j]) / (eta * load_direction[j])
+            s_j = (mu_brokers[j] - delta_s - loads[j]) / (eta * load_direction[j])
             s_t = min(s_t, s_j)
 
     return max(0.0, s_t)
 
-def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12):
+def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12,
+                   delta_s: float = 1e-8):
     """
-    Perform one iteration of the distributed synchronous algorithm.
+    Perform one iteration of Algorithm 1.
+
+    delta_s is the capacity margin kept below every broker's capacity by the
+    safe step (paper: delta_s; the reference notebook uses 1e-8). eps only
+    guards divisions against zero and is not a modeling parameter.
     """
     l_prev = state.lambda_ij.copy()
     p_prev = state.prices.copy()
@@ -62,7 +67,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
         )
 
     # 4. Calculate safe step
-    s_t = compute_safe_step(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, eps)
+    s_t = compute_safe_step(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s)
 
     # 5. Update routing
     step = eta * s_t
