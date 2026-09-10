@@ -32,12 +32,16 @@ class SimulationHandler:
     """
     def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None,
                  eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
-                 window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9):
+                 window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9,
+                 rng: np.random.Generator = None):
         self.engine = engine
         self.topology = topology
         self.state = state
         self.x_ij = x_ij # Current routing flows (rows sum to lambda_i)
         self.request_id_counter = 0
+        # All randomness (arrivals, routing draws, service times) comes from
+        # this generator, so a seeded run is reproducible. None: unseeded.
+        self.rng = rng if rng is not None else np.random.default_rng()
 
         # Controller parameters (notebook defaults: ETA_SPLIT, GAMMA_PRICE, BETA_LAMBDA)
         self.eta = eta          # inertia on split updates
@@ -86,7 +90,7 @@ class SimulationHandler:
     def _handle_source_arrival(self, event: Event):
         # 1. Schedule next arrival for this source
         lam_i = self.topology.lambdas_total[event.source_id]
-        inter_arrival = np.random.exponential(1.0 / lam_i)
+        inter_arrival = self.rng.exponential(1.0 / lam_i)
         self.engine.schedule(Event(
             timestamp=self.engine.now + inter_arrival,
             event_type=EventType.SOURCE_ARRIVAL,
@@ -102,7 +106,7 @@ class SimulationHandler:
             # If no flow is allocated, pick randomly
             probs = np.ones(len(self.topology.brokers)) / len(self.topology.brokers)
 
-        broker_id = np.random.choice(len(self.topology.brokers), p=probs)
+        broker_id = int(self.rng.choice(len(self.topology.brokers), p=probs))
 
         # 3. Work-unit tracking
         req_id = self.request_id_counter
@@ -129,7 +133,7 @@ class SimulationHandler:
 
         # Service time ~ Exp(mu_ij)
         mu_ij = self.topology.mu_links[event.source_id, event.broker_id]
-        service_time = np.random.exponential(1.0 / mu_ij)
+        service_time = self.rng.exponential(1.0 / mu_ij)
 
         self.engine.schedule(Event(
             timestamp=self.engine.now + service_time,
@@ -186,7 +190,7 @@ class SimulationHandler:
 
         # Service time ~ Exp(mu_j)
         mu_j = self.topology.mu_brokers[event.broker_id]
-        service_time = np.random.exponential(1.0 / mu_j)
+        service_time = self.rng.exponential(1.0 / mu_j)
 
         self.engine.schedule(Event(
             timestamp=self.engine.now + service_time,

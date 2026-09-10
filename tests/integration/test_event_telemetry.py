@@ -8,12 +8,12 @@ from src.simulation.queues import SimulationState
 from src.telemetry.metrics import TelemetryBuffer
 
 def test_windowed_records_queue_and_latency_metrics():
-    np.random.seed(1)
     topo = Topology(np.array([30.0, 10.0]), np.full((2, 2), 60.0), np.array([80.0, 60.0]), ["A", "B"], ["S1", "S2"])
     engine = SimulationEngine()
     state = SimulationState(2, 2, topo.mu_links, topo.mu_brokers, keep_requests=False)
     telemetry = TelemetryBuffer()
-    handler = SimulationHandler(engine, topo, state, np.array([[15.0, 15.0], [5.0, 5.0]]), telemetry=telemetry)
+    handler = SimulationHandler(engine, topo, state, np.array([[15.0, 15.0], [5.0, 5.0]]), telemetry=telemetry,
+                                rng=np.random.default_rng(1))
     for i in range(2):
         engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
     engine.run(duration=100.0, handler=handler.handle_event)

@@ -19,6 +19,7 @@ from src.telemetry.schema import controller_snapshot
 from src.controller.synchronous import iteration_step
 from src.simulation.state import SystemState
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
+from src.runtime.metadata import resolve_seed, write_run_metadata
 
 # Global flag for graceful shutdown
 RUNNING = True
@@ -49,14 +50,26 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     print(f"Writing telemetry to {output_dir / 'metrics.jsonl'}")
 
     mode = controller_mode(config)
-    print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}")
+    seed = resolve_seed(config)
+    if mode == 'static_algorithm1':
+        params = {"eta": float(alg_cfg.get('eta', 0.25)), "gamma": float(alg_cfg.get('gamma', 0.5)),
+                  "delta_s": float(alg_cfg.get('delta_s', 1e-8)),   # Algorithm 1 capacity margin
+                  "eps": float(alg_cfg.get('eps', 1e-12)),          # numerical guard only
+                  "window": window}
+    else:
+        params = {"eta": float(alg_cfg.get('eta', 0.35)), "gamma": float(alg_cfg.get('gamma', 0.5)),
+                  "beta": float(alg_cfg.get('beta', 0.3)), "delta_s": None,   # no safe step in this mode
+                  "window": window, "warmup": int(sim_cfg.get('warmup', 4))}
+    write_run_metadata(output_dir, config, topo, seed=seed, controller_mode=mode, real_time=real_time,
+                       parameters=params, config_path=config_path)
+    print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}; seed: {seed}")
     if np.isinf(duration):
         print(f"Running until stopped, controller every {window}s. Press Ctrl+C to stop.", flush=True)
     else:
         print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.", flush=True)
 
     if mode == 'static_algorithm1':
-        run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time)
+        run_static(topo, params, duration, telemetry, real_time)
         telemetry.close()
         return
 
@@ -66,11 +79,9 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
                             keep_requests=False)
     handler = SimulationHandler(
         engine, topo, state, x_ij, telemetry=telemetry,
-        eta=float(alg_cfg.get('eta', 0.35)),
-        gamma=float(alg_cfg.get('gamma', 0.5)),
-        beta=float(alg_cfg.get('beta', 0.3)),
-        window=window,
-        warmup_windows=int(sim_cfg.get('warmup', 4)),
+        eta=params["eta"], gamma=params["gamma"], beta=params["beta"],
+        window=window, warmup_windows=params["warmup"],
+        rng=np.random.default_rng(seed),
     )
 
     # Initial events: first arrivals for all sources
@@ -102,15 +113,12 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
     else:
         print("No work units completed during the simulation.")
 
-def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
+def run_static(topo, params, duration, telemetry, real_time):
     """
     static_algorithm1: paper Algorithm 1 on the analytic model (no events or queues),
     one iteration per window. Reproduces the notebook's static convergence plots.
     """
-    eta = float(alg_cfg.get('eta', 0.25))
-    gamma = float(alg_cfg.get('gamma', 0.5))
-    eps = float(alg_cfg.get('eps', 1e-12))          # numerical guard only
-    delta_s = float(alg_cfg.get('delta_s', 1e-8))   # Algorithm 1 capacity margin
+    eta, gamma, eps, delta_s, window = (params[k] for k in ("eta", "gamma", "eps", "delta_s", "window"))
 
     # Algorithm 1 requires an initial routing with Lambda_j <= mu_j - delta_s
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers, margin=delta_s)

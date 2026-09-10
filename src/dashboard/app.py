@@ -1,4 +1,5 @@
 import atexit
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -93,7 +94,8 @@ with st.sidebar:
         try:
             if topology_source == "Generate":
                 config = {
-                    "simulation": {"window": window, "warmup": int(warmup), "controller_mode": "windowed_stochastic"},
+                    "simulation": {"window": window, "warmup": int(warmup), "controller_mode": "windowed_stochastic",
+                                   "seed": int(seed)},
                     "algorithm": {"eta": eta, "gamma": gamma, "beta": beta},
                     "topology": generate_topology_config(n_sources, n_brokers, load, int(seed)),
                 }
@@ -140,15 +142,13 @@ def load_data():
     return df
 
 def node_names(df):
-    """Source and broker ids: from the launched config when it matches, else P0.. / SN1.."""
+    """Source and broker ids from the run's run.json when it matches, else P0.. / SN1.."""
     n_sources, n_brokers = np.array(df["lambda_ij"].iloc[-1]).shape
     try:
-        topo_cfg = yaml.safe_load(RUN_CONFIG.read_text())["topology"]
-        sources = [s["id"] for s in topo_cfg["sources"]]
-        brokers = [b["id"] for b in topo_cfg["brokers"]]
-        if (len(sources), len(brokers)) == (n_sources, n_brokers):
-            return sources, brokers
-    except (OSError, KeyError, TypeError, yaml.YAMLError):
+        meta = json.loads((OUTPUT_DIR / "run.json").read_text())
+        if (meta["n_sources"], meta["n_brokers"]) == (n_sources, n_brokers):
+            return meta["sources"], meta["brokers"]
+    except (OSError, KeyError, ValueError):
         pass
     return [f"P{i}" for i in range(n_sources)], [f"SN{j + 1}" for j in range(n_brokers)]
 

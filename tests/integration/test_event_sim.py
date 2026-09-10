@@ -12,7 +12,6 @@ def test_event_driven_mm1_latency():
     brokers = ["SN1"]
     # Moderate load: at rho=0.9 the queue mixes too slowly for a short run to
     # converge (~50% of unseeded runs fell outside 20%).
-    np.random.seed(0)
     lambdas_total = np.array([0.5]) # 0.5 pkts/s
     mu_links = np.array([[1.0]])    # 1.0 pkt/s
     mu_brokers = np.array([1.0])   # 1.0 pkt/s
@@ -23,7 +22,7 @@ def test_event_driven_mm1_latency():
     engine = SimulationEngine()
     state = SimulationState(1, 1, mu_links, mu_brokers)
     x_ij = np.array([[1.0]])
-    handler = SimulationHandler(engine, topo, state, x_ij)
+    handler = SimulationHandler(engine, topo, state, x_ij, rng=np.random.default_rng(0))
 
     # Initial arrival
     engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=0))

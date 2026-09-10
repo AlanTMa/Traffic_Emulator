@@ -11,8 +11,8 @@ def theoretical_delay(lam: float, mu_link: float, mu_broker: float) -> float:
     """Theoretical mean end-to-end delay for 1 source, 1 broker M/M/1 system."""
     return 1.0 / (mu_link - lam) + 1.0 / (mu_broker - lam)
 
-def run_simulation(lam: float, mu_link: float, mu_broker: float, trials: int = 3) -> float:
-    """Runs the simulation for several trials and returns the average mean latency."""
+def run_simulation(lam: float, mu_link: float, mu_broker: float, trials: int = 3, seed: int = 0) -> float:
+    """Runs the simulation for several seeded trials and returns the average mean latency."""
     d_theoretical = theoretical_delay(lam, mu_link, mu_broker)
 
     # Convergence strategy
@@ -36,7 +36,7 @@ def run_simulation(lam: float, mu_link: float, mu_broker: float, trials: int = 3
         # Routing flows, not fractions: sum_j x_ij must equal lambda_i
         x_ij = np.array([[lam]])
         assert np.allclose(x_ij.sum(axis=1), lambdas_total)
-        handler = SimulationHandler(engine, topo, state, x_ij)
+        handler = SimulationHandler(engine, topo, state, x_ij, rng=np.random.default_rng([seed, trial]))
 
         # Initial arrival
         engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=0))

@@ -9,7 +9,6 @@ from src.model.topology import Topology
 def test_measured_price_controller_balances():
     # 2 sources, 2 identical brokers. Rates are high enough (~200 packets per
     # broker per window) for the measured-rate prices to be informative.
-    np.random.seed(0)
     sources = ["P0", "P1"]
     brokers = ["SN1", "SN2"]
     lambdas_total = np.array([40.0, 40.0])
@@ -23,7 +22,7 @@ def test_measured_price_controller_balances():
 
     engine = SimulationEngine()
     state = SimulationState(2, 2, mu_links, mu_brokers)
-    handler = SimulationHandler(engine, topo, state, x_ij)
+    handler = SimulationHandler(engine, topo, state, x_ij, rng=np.random.default_rng(0))
 
     for i in range(2):
         engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
@@ -34,15 +33,15 @@ def test_measured_price_controller_balances():
     print(f"\nFinal Routing Matrix:\n{handler.x_ij}")
 
     # Symmetric optimum is an even split. Prices come from measured traffic,
-    # so allow for noise: across 10 seeds the worst deviation was ~2.0.
-    assert handler.x_ij == pytest.approx(np.full((2, 2), 20.0), abs=3.0)
+    # so allow for noise: across seeds 0-9 the worst deviation was ~1.0.
+    assert handler.x_ij == pytest.approx(np.full((2, 2), 20.0), abs=2.0)
 
 def test_splits_frozen_during_warmup():
-    np.random.seed(0)
     topo = Topology(np.array([40.0]), np.array([[100.0, 100.0]]), np.array([100.0, 100.0]), ["P0"], ["SN1", "SN2"])
     engine = SimulationEngine()
     handler = SimulationHandler(engine, topo, SimulationState(1, 2, topo.mu_links, topo.mu_brokers),
-                                np.array([[40.0, 0.0]]), window=5.0, warmup_windows=4)
+                                np.array([[40.0, 0.0]]), window=5.0, warmup_windows=4,
+                                rng=np.random.default_rng(0))
     engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=0))
 
     # Through the 4th window (t=20) the split must not move; the 5th adapts it
