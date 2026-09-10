@@ -12,6 +12,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from src.controller.diagnostics import DEFAULT_TOLERANCES
 from src.model.config import load_config
 from src.model.generate import generate_topology_config
 
@@ -115,7 +116,7 @@ if RUN_CONFIG.exists() and holder["label"]:
 
 # --- Live charts ---
 
-VIEWS = ["Overview", "Brokers", "Routing"]
+VIEWS = ["Overview", "Brokers", "Routing", "Optimality"]
 view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
 
 def load_data():
@@ -271,7 +272,87 @@ def render_routing(df):
                               "e2e_i": "Σ_j λ_ij (D_ij + D_j) / λ_i  (s)"})
         st.plotly_chart(fig, width="stretch", key="chart_source_delay")
 
-RENDERERS = {"Overview": render_overview, "Brokers": render_brokers, "Routing": render_routing}
+RESIDUALS = {  # telemetry key -> (label, certificate tolerance key)
+    "r_conservation": ("conservation", "r_conservation"),
+    "r_capacity": ("capacity", "r_service_capacity"),
+    "r_price": ("price consistency", "r_price"),
+    "r_fixed_point": ("fixed point", "r_fixed_point"),
+    "r_kkt_stationarity": ("KKT stationarity", "r_active_stationarity"),
+    "r_kkt_complementarity": ("KKT complementarity", "r_kkt_complementarity"),
+    "r_inactive_complementarity": ("unused-route KKT", "r_inactive_complementarity"),
+}
+
+def render_optimality(df):
+    sources, brokers = node_names(df)
+    last = df.iloc[-1]
+
+    # Proposition 1 certificate for the latest state (never a convergence claim)
+    if last["certified"]:
+        st.success(f"PASS · {last['certificate_status']} (iteration {int(last['iteration'])})")
+    else:
+        st.error(f"FAIL · {last['certificate_status']} (iteration {int(last['iteration'])})")
+    if last["controller_mode"] == "windowed_stochastic":
+        st.caption("windowed_stochastic prices follow noisy measured rates, so price consistency and the "
+                   "fixed point are not expected to hold exactly.")
+
+    # Total marginal cost per route; unused routes (in the latest state) dotted
+    st.subheader("Total marginal cost C_ij + C_j")
+    marg = per_route(df, "M_ij", sources, brokers)
+    active_now = pd.DataFrame(last["active_ij"], index=sources, columns=brokers)
+    marg["route"] = np.where([active_now.loc[s, b] for s, b in zip(marg["source"], marg["broker"])], "used", "unused")
+    fig = px.line(marg, x="iteration", y="M_ij", color="broker", line_dash="route", facet_col="source",
+                  facet_col_wrap=min(len(sources), 5), log_y=True,
+                  line_dash_map={"used": "solid", "unused": "dot"},
+                  labels={"iteration": "Iteration", "M_ij": "C_ij + C_j"})
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+    st.plotly_chart(fig, width="stretch", key="chart_marginal_cost")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        # KKT / Wardrop: used routes equalize at alpha_i, unused routes lie at or above it
+        st.subheader("KKT / Wardrop equalization (latest)")
+        current = pd.DataFrame({
+            "source": np.repeat(sources, len(brokers)),
+            "broker": np.tile(brokers, len(sources)),
+            "M_ij": np.array(last["M_ij"]).reshape(-1),
+            "route": np.where(np.array(last["active_ij"]).reshape(-1), "used", "unused"),
+        })
+        fig = px.scatter(current, x="source", y="M_ij", color="broker", symbol="route", log_y=True,
+                         symbol_map={"used": "circle", "unused": "circle-open"},
+                         labels={"M_ij": "C_ij + C_j"})
+        fig.add_scatter(x=sources, y=last["alpha_i"], mode="markers", name="α_i",
+                        marker=dict(symbol="line-ew-open", size=28, color="black"))
+        fig.update_traces(marker_size=11, selector=dict(mode="markers", type="scatter"))
+        st.plotly_chart(fig, width="stretch", key="chart_kkt")
+    with col2:
+        st.subheader("Common safe step s_t")
+        if df["s_t"].notna().any():
+            steps = per_broker(df[df["s_j"].notna()], "s_j", brokers)
+            fig = px.line(steps, x="iteration", y="s_j", color="broker",
+                          labels={"iteration": "Iteration", "s_j": "Step bound"})
+            fig.add_scatter(x=df["iteration"], y=df["s_t"], mode="lines", name="s_t = min_j s_j",
+                            line=dict(color="black", width=3, dash="dash"))
+            fig.update_yaxes(range=[0, 1.05])
+            st.plotly_chart(fig, width="stretch", key="chart_safe_step")
+        else:
+            st.info("This controller mode has no safe step (windowed_stochastic); see static_algorithm1.")
+
+    st.subheader("Residual diagnostics")
+    floor = 1e-18  # exact zeros cannot be drawn on a log axis
+    resid = pd.DataFrame({label: df[key].astype(float).clip(lower=floor)
+                          for key, (label, _) in RESIDUALS.items() if key in df})
+    resid["iteration"] = df["iteration"].to_numpy()
+    fig = px.line(resid.melt(id_vars="iteration", var_name="residual", value_name="value"),
+                  x="iteration", y="value", color="residual", log_y=True,
+                  labels={"iteration": "Iteration", "value": f"Residual (zeros drawn at {floor:g})"})
+    st.plotly_chart(fig, width="stretch", key="chart_residuals")
+    table = pd.DataFrame([{"residual": label, "latest": last[key], "tolerance": DEFAULT_TOLERANCES[tol_key],
+                           "pass": bool(abs(last[key]) <= DEFAULT_TOLERANCES[tol_key])}
+                          for key, (label, tol_key) in RESIDUALS.items()])
+    st.dataframe(table.style.format({"latest": "{:.3e}", "tolerance": "{:.0e}"}), hide_index=True)
+
+RENDERERS = {"Overview": render_overview, "Brokers": render_brokers, "Routing": render_routing,
+             "Optimality": render_optimality}
 
 # The fragment re-runs on its own every REFRESH_RATE seconds, so each chart
 # key is registered exactly once per run.
