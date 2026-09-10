@@ -192,6 +192,11 @@ def test_prepare_run_validation(tmp_path):
     assert resolved["simulation"]["execution_backend"] == "distributed"
     assert resolved["simulation"]["window"] == 2.0 and resolved["algorithm"]["eta"] == 0.25
     assert launcher.compose_command(run)[-4:] == ["--scale", "source=5", "--scale", "broker=3"]
+    assert "--exit-code-from" in launcher.compose_command(run, duration=30)
+    with pytest.raises(ValueError, match="under runs/"):         # only runs/ is mounted in the containers
+        launcher.compose_env(run)
+    env = launcher.compose_env({**run, "output_dir": ROOT / "runs" / "ci"}, 30)
+    assert env["TE_CONFIG"] == "runs/ci/resolved_config.yaml" and env["TE_DURATION"] == "30"
 
 def test_compose_file_defines_replicable_services():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())

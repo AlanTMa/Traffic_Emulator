@@ -1,0 +1,13 @@
+# The image needs only requirements.txt, src/, config/ and scripts/;
+# runs/ is mounted at run time.
+.git
+.github
+runs
+tests
+docs
+*.ipynb
+**/__pycache__
+.pytest_cache
+*.egg-info
+.venv
+venv

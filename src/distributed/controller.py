@@ -306,7 +306,9 @@ def main():
     parser.add_argument("--output-dir", default=os.environ.get("TE_OUTPUT_DIR", "runs/distributed"))
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=int(os.environ.get("CONTROL_PORT", CONTROL_PORT)))
-    parser.add_argument("--duration", type=float, help="stop after this many seconds (default: run until stopped)")
+    parser.add_argument("--duration", type=float,
+                        default=float(os.environ["TE_DURATION"]) if os.environ.get("TE_DURATION") else None,
+                        help="stop after this many seconds (default: run until stopped)")
     args = parser.parse_args()
     service = ControllerService(load_config(args.config), args.output_dir, args.host, args.port,
                                 duration=args.duration, config_path=args.config)

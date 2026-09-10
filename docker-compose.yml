@@ -31,6 +31,11 @@ services:
               "--config", "${TE_CONFIG:-config/paper_5x3.yaml}",
               "--output-dir", "${TE_OUTPUT_DIR:-runs/latest}",
               "--host", "0.0.0.0", "--port", "7000"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TE_DURATION: ${TE_DURATION:-}       # empty: run until stopped
+      TE_GIT_SHA: ${TE_GIT_SHA:-}         # recorded in run.json (the image has no .git)
+      TE_GIT_DIRTY: ${TE_GIT_DIRTY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 7000), 2).close()"]
       interval: 2s
@@ -62,7 +67,7 @@ services:
     command: ["python", "-m", "streamlit", "run", "src/dashboard/app.py",
               "--server.address", "0.0.0.0", "--server.port", "8501", "--server.headless", "true"]
     ports:
-      - "8501:8501"
+      - "${TE_DASHBOARD_PORT:-8501}:8501"
     environment:
       PYTHONUNBUFFERED: "1"
       TRAFFIC_EMULATOR_OUTPUT_DIR: /app/${TE_OUTPUT_DIR:-runs/latest}

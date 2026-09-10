@@ -2,6 +2,7 @@
 Run metadata written next to the telemetry (run.json) for reproducibility.
 """
 import json
+import os
 import platform
 import secrets
 import subprocess
@@ -19,14 +20,21 @@ def resolve_seed(config: dict) -> int:
     return int(seed) if seed is not None else secrets.randbits(32)
 
 def git_revision() -> dict:
-    """Commit SHA of the working tree and whether it has uncommitted changes."""
+    """
+    Commit SHA of the working tree and whether it has uncommitted changes.
+    Inside a container (no .git) the launcher passes them as TE_GIT_SHA / TE_GIT_DIRTY.
+    """
     def git(*args):
         return subprocess.run(["git", *args], cwd=PROJECT_ROOT, capture_output=True, text=True,
                               timeout=10).stdout.strip()
     try:
-        return {"sha": git("rev-parse", "HEAD") or None, "dirty": bool(git("status", "--porcelain", "--untracked-files=no"))}
+        sha = git("rev-parse", "HEAD") or None
+        if sha:
+            return {"sha": sha, "dirty": bool(git("status", "--porcelain", "--untracked-files=no"))}
     except (OSError, subprocess.SubprocessError):
-        return {"sha": None, "dirty": None}
+        pass
+    dirty = os.environ.get("TE_GIT_DIRTY")
+    return {"sha": os.environ.get("TE_GIT_SHA") or None, "dirty": None if not dirty else dirty == "1"}
 
 def write_run_metadata(output_dir: Path, config: dict, topology, *, seed: int, controller_mode: str,
                        real_time: bool, parameters: dict, config_path: str = None, extra: dict = None) -> dict:

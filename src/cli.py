@@ -250,8 +250,8 @@ def main():
     up_parser.add_argument("--output-dir", default="runs/distributed", help="telemetry and run metadata")
     up_parser.add_argument("--no-dashboard", action="store_true")
     up_parser.add_argument("--port", type=int, default=7000, help="local backend: controller port")
-    up_parser.add_argument("--dashboard-port", type=int, default=8501, help="local backend: dashboard port")
-    up_parser.add_argument("--duration", type=float, help="local backend: stop after this many seconds")
+    up_parser.add_argument("--dashboard-port", type=int, default=8501, help="dashboard port on this machine")
+    up_parser.add_argument("--duration", type=float, help="stop after this many seconds (default: run until Ctrl+C)")
 
     args = parser.parse_args()
 
@@ -267,7 +267,7 @@ def main():
         launcher.describe(run)
         if args.backend == "local":
             sys.exit(launcher.run_local(run, args.port, not args.no_dashboard, args.dashboard_port, args.duration))
-        sys.exit(launcher.run_docker(run, not args.no_dashboard))
+        sys.exit(launcher.run_docker(run, not args.no_dashboard, args.duration, args.dashboard_port))
 
     if args.command == "run":
         config_path = args.config

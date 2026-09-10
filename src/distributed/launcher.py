@@ -30,6 +30,7 @@ from src.distributed.protocol import CONTROL_PORT
 from src.distributed.settings import distributed_settings, resolved_config
 from src.model.config import load_config, topology_from_config
 from src.model.generate import generate_topology_config
+from src.runtime.metadata import git_revision
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -131,32 +132,46 @@ def run_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashb
 
 # ---------------------------------------------------------------- Docker Compose
 
-def compose_command(run: dict, dashboard: bool = True) -> list:
+def compose_command(run: dict, dashboard: bool = True, duration: float = None) -> list:
     services = [] if dashboard else ["controller", "broker", "source"]
-    return ["docker", "compose", "--profile", "distributed", "up", "--build",
+    finite = ["--exit-code-from", "controller"] if duration is not None else []   # end with the controller
+    return ["docker", "compose", "--profile", "distributed", "up", "--build", *finite,
             "--scale", f"source={run['n']}", "--scale", f"broker={run['m']}", *services]
 
-def compose_env(run: dict) -> dict:
+def compose_env(run: dict, duration: float = None, dashboard_port: int = 8501) -> dict:
     out = Path(run["output_dir"]).resolve()
     try:
         rel = out.relative_to(PROJECT_ROOT / "runs")
     except ValueError:
         raise ValueError("with --backend docker the output directory must be under runs/ (mounted in the containers)")
     rel_posix = rel.as_posix()
-    return {**os.environ, "TE_CONFIG": f"runs/{rel_posix}/resolved_config.yaml", "TE_OUTPUT_DIR": f"runs/{rel_posix}"}
+    env = {**os.environ, "TE_CONFIG": f"runs/{rel_posix}/resolved_config.yaml", "TE_OUTPUT_DIR": f"runs/{rel_posix}"}
+    env["TE_DURATION"] = "" if duration is None else str(duration)
+    env["TE_DASHBOARD_PORT"] = str(dashboard_port)
+    git = git_revision()                     # the image has no .git; run.json records the host's revision
+    env["TE_GIT_SHA"] = git["sha"] or ""
+    env["TE_GIT_DIRTY"] = "" if git["dirty"] is None else str(int(git["dirty"]))
+    return env
 
-def run_docker(run: dict, dashboard: bool = True) -> int:
+def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashboard_port: int = 8501) -> int:
     if shutil.which("docker") is None:
         print("docker was not found on PATH. Install Docker, or run the same processes locally with --backend local.")
         return 2
-    env = compose_env(run)
-    cmd = compose_command(run, dashboard)
+    env = compose_env(run, duration, dashboard_port)
+    cmd = compose_command(run, dashboard, duration)
     print("  " + " ".join(cmd))
     if dashboard:
-        print("  dashboard: http://localhost:8501")
+        print(f"  dashboard: http://localhost:{dashboard_port}")
+    proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT, env=env)
     try:
-        code = subprocess.call(cmd, cwd=PROJECT_ROOT, env=env)
+        code = proc.wait()
     except KeyboardInterrupt:
-        code = 130
+        # Compose got the same Ctrl+C and stops the containers (SIGTERM: each process
+        # shuts down cleanly); wait for that before removing them
+        try:
+            code = proc.wait(timeout=60)
+        except (KeyboardInterrupt, subprocess.TimeoutExpired):
+            proc.terminate()
+            code = 130
     subprocess.call(["docker", "compose", "--profile", "distributed", "down"], cwd=PROJECT_ROOT, env=env)
     return code
