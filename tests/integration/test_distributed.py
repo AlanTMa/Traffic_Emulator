@@ -25,7 +25,7 @@ from src.distributed import launcher
 from src.distributed.controller import ControllerService
 from src.distributed.protocol import encode
 from src.distributed.settings import distributed_settings
-from src.model.config import load_config, topology_from_config
+from src.model.config import load_config, topology_from_config, with_controller_mode
 from src.simulation.state import SystemState
 from src.telemetry.metrics import TelemetryBuffer
 
@@ -127,7 +127,7 @@ def test_settings_resolution():
     s = distributed_settings(load_config(PAPER))             # windowed config: paper Algorithm 1 defaults
     assert s["params"]["eta"] == 0.25 and s["params"]["gamma"] == 0.5 and s["params"]["delta_s"] == 1e-8
     assert s["notes"] and s["controller_mode"] == "capacity_safe_event_driven"
-    cs = distributed_settings(load_config(ROOT / "config" / "capacity_safe_5x3.yaml"))
+    cs = distributed_settings(with_controller_mode(load_config(PAPER), "capacity_safe_event_driven"))
     assert cs["params"]["eta"] == 0.25 and not cs["notes"]
     assert distributed_settings(load_config(PAPER), {"eta": 0.1})["params"]["eta"] == 0.1
     with pytest.raises(ValueError, match="static capacities"):

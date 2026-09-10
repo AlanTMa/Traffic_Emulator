@@ -18,7 +18,7 @@
 | KKT conditions (eq. 14) | `solve_central_reference` KKT polish | `central.py::solve_central` (`kkt_equations`) | |
 | Source problem (eq. 15) | `best_response_mm1_optimizer` (validation only) | `tests/regression/test_notebook_batteries.py::optimizer_best_response` | Validation only, as in the notebook |
 | Threshold best response (eq. 16) | `best_response_mm1` (cell 4) | `controller/best_response.py::best_response_mm1`; `best_response_available` for sparse rows | Same algorithm and the same input validation as the notebook |
-| 5x3 instance (Sec. V-A) | cells 0–2 (seed 42, topics → MB/s) | `config/paper_5x3.yaml`, `config/convergence_5x3.yaml`, `tests/regression/data/baseline_5x3.json` | Exact unrounded values |
+| 5x3 instance (Sec. V-A) | cells 0–2 (seed 42, topics → MB/s) | `config/paper_5x3.yaml`, `tests/regression/data/baseline_5x3.json` | Exact unrounded values |
 | Units: msg/s × size → MB/s | `producer_emission_MBps` (cell 2); `PACKET_MB = 1.0` (cell 14) | `model/topology.py` module docstring | Event = one normalized work unit (1 MB for 5x3) |
 
 ## Algorithm 1 (Sec. IV-D)

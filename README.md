@@ -60,7 +60,10 @@ Message sizes and per-message service are not modeled, so simulated
 
 ## Controller modes
 
-Set `simulation.controller_mode` in a config:
+Set `simulation.controller_mode` in a config, or pass `--controller` to
+`python -m src.cli run` (a different mode than the config's runs with that
+mode's default parameters, since e.g. η means split inertia in the windowed
+scheme and the Algorithm 1 step size otherwise):
 
 | Mode | What runs | Guarantees |
 |---|---|---|
@@ -131,7 +134,7 @@ src/
                          views; observer-only for distributed runs
 scripts/                 load_sweep.py (1x1 M/M/1), sweep_5x3.py (high load),
                          compare_modes.py (three modes side by side)
-config/                  paper_5x3, convergence_5x3, capacity_safe_5x3, simple_1x1, sparse_3x3
+config/paper_5x3.yaml    the canonical 5x3 instance (exact notebook parameters)
 tests/                   unit, integration (incl. distributed vs reference), regression
 Dockerfile, docker-compose.yml   one image; controller/broker/source/dashboard services
 ```
@@ -215,12 +218,14 @@ Architecture, protocol, where μ_ij and μ_j are modeled, and limitations:
 ### Sparse topologies
 
 Links that do not exist are declared explicitly; every other source->broker
-pair still needs a capacity (see `config/sparse_3x3.yaml`):
+pair still needs a capacity (an omission is an error):
 
 ```yaml
 topology:
-  access_capacities: {"P0->SN1": 7.0, "P0->SN2": 6.0, ...}
-  unavailable_links: ["P0->SN3", "P1->SN1"]
+  sources: [{id: P0, rate: 6.0}, {id: P1, rate: 5.0}]
+  brokers: [{id: SN1, capacity: 12.0}, {id: SN2, capacity: 9.0}]
+  access_capacities: {"P0->SN1": 7.0, "P0->SN2": 6.0, "P1->SN2": 8.0}
+  unavailable_links: ["P1->SN1"]
 ```
 
 Missing links carry no flow in every mode (best responses, LP start,
@@ -246,11 +251,12 @@ each update; it cannot undo a later capacity drop, and telemetry records
 ### Reproducing the 5x3 results
 
 ```bash
-python -m src.cli run --config config/convergence_5x3.yaml --no-realtime
+python -m src.cli run --config config/paper_5x3.yaml --controller static_algorithm1 --window 1 --duration 100 --no-realtime
 ```
 
 Runs Algorithm 1 for 100 iterations on the exact notebook instance and ends
-at F = 2.0157473649 with the certificate passing. The regression gate
+at F = 2.0157473649 with the certificate passing (it first passes at
+iteration 56). The regression gate
 (`tests/regression/test_baseline_5x3.py`) checks iterations, λ_ij, loads,
 utilizations, prices, the active route set, the objective, the centralized
 comparison and every residual against `tests/regression/data/baseline_5x3.json`.

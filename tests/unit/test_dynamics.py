@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from src.cli import run_simulation
+from src.model.config import load_config, with_controller_mode
 from src.model.dynamics import NOTEBOOK_COMBOS, CapacityVariation, vary_broker_capacity, vary_link_capacity
 from src.model.topology import Topology
 from src.runtime.experiments import canonical_5x3
@@ -75,8 +76,8 @@ def test_event_service_uses_current_capacity():
 
 @pytest.mark.parametrize("mode", ["capacity_safe_event_driven", "windowed_stochastic", "static_algorithm1"])
 def test_cli_runs_with_time_varying_capacities(tmp_path, mode):
-    cfg = yaml.safe_load(open("config/capacity_safe_5x3.yaml"))
-    cfg["simulation"].update(controller_mode=mode, duration=60, seed=2)
+    cfg = with_controller_mode(load_config("config/paper_5x3.yaml"), mode)
+    cfg["simulation"].update(duration=60, seed=2)
     cfg["dynamics"] = {"capacity_variation": {"combo": 2}}
     path = tmp_path / "dyn.yaml"
     path.write_text(yaml.safe_dump(cfg))

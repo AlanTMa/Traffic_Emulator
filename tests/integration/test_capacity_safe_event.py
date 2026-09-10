@@ -14,7 +14,7 @@ import yaml
 from src.cli import run_simulation
 from src.controller.feasibility import transportation_feasibility
 from src.controller.synchronous import iteration_step, run_algorithm1
-from src.model.config import load_config, topology_from_config
+from src.model.config import load_config, topology_from_config, with_controller_mode
 from src.model.topology import Topology
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
@@ -24,7 +24,7 @@ from src.simulation.state import SystemState
 from src.telemetry.metrics import TelemetryBuffer
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG = ROOT / "config" / "capacity_safe_5x3.yaml"
+CONFIG = ROOT / "config" / "paper_5x3.yaml"
 DELTA_S = 1e-8
 
 def make_handler(topo, x0=None, *, seed=0, delta_s=DELTA_S, eta=0.25, gamma=0.5, telemetry=True, **kwargs):
@@ -162,7 +162,7 @@ def test_routing_probabilities_follow_updated_plan(topo_5x3):
 # 8-9. Seeded reproducibility, mode in telemetry and run.json
 
 def _cli_rows(tmp_path, name, seed):
-    cfg = load_config(CONFIG)
+    cfg = with_controller_mode(load_config(CONFIG), "capacity_safe_event_driven")
     cfg["simulation"].update(duration=30, seed=seed)
     path = tmp_path / f"{name}.yaml"
     path.write_text(yaml.safe_dump(cfg))

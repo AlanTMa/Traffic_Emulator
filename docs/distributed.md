@@ -250,7 +250,7 @@ TRAFFIC_EMULATOR_OUTPUT_DIR=runs/distributed TRAFFIC_EMULATOR_OBSERVER=1 streaml
 The reference backend on the same instance:
 
 ```bash
-python -m src.cli run --config config/convergence_5x3.yaml --no-realtime
+python -m src.cli run --config config/paper_5x3.yaml --controller static_algorithm1 --window 1 --duration 100 --no-realtime
 ```
 
 ## What Docker does here
