@@ -12,10 +12,7 @@ class EventType(Enum):
     BROKER_ARRIVAL = auto()
     BROKER_SERVICE_START = auto()
     BROKER_SERVICE_COMPLETE = auto()
-    # Asynchronous Controller Events
-    PRICE_BROADCAST = auto()
-    PRICE_RECEIVED = auto()
-    ROUTING_UPDATE = auto()
+    # End of a controller window (price + routing update)
     CONTROLLER_TICK = auto()
 
 @dataclass(order=True)

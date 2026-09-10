@@ -6,35 +6,50 @@ from src.simulation.queues import SimulationState
 from src.simulation.handler import SimulationHandler
 from src.model.topology import Topology
 
-def test_async_controller_convergence():
-    # 2 sources, 2 brokers
+def test_measured_price_controller_balances():
+    # 2 sources, 2 identical brokers. Rates are high enough (~200 packets per
+    # broker per window) for the measured-rate prices to be informative.
+    np.random.seed(0)
     sources = ["P0", "P1"]
     brokers = ["SN1", "SN2"]
-    lambdas_total = np.array([0.4, 0.4]) # Total 0.8
-    mu_links = np.array([[1.0, 1.0], [1.0, 1.0]])
-    mu_brokers = np.array([1.0, 1.0])
+    lambdas_total = np.array([40.0, 40.0])
+    mu_links = np.full((2, 2), 100.0)
+    mu_brokers = np.array([100.0, 100.0])
 
     topo = Topology(lambdas_total, mu_links, mu_brokers, sources, brokers)
 
     # Start with unbalanced routing: all flow to SN1 (rows sum to lambda_i)
-    x_ij = np.array([[0.4, 0.0], [0.4, 0.0]])
+    x_ij = np.array([[40.0, 0.0], [40.0, 0.0]])
 
     engine = SimulationEngine()
     state = SimulationState(2, 2, mu_links, mu_brokers)
     handler = SimulationHandler(engine, topo, state, x_ij)
 
-    # Initial arrival
-    engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=0))
-    engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=1))
+    for i in range(2):
+        engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
 
-    # Run for a while to see if routing balances
-    engine.run(duration=100.0, handler=handler.handle_event)
+    # 60 windows of 5s, 4 of them warm-up (notebook defaults)
+    engine.run(duration=300.0, handler=handler.handle_event)
 
-    # Check if routing has shifted away from [1.0, 0.0]
     print(f"\nFinal Routing Matrix:\n{handler.x_ij}")
 
-    # Symmetric optimum: each source splits its 0.4 evenly across both brokers
-    assert handler.x_ij == pytest.approx(np.full((2, 2), 0.2), abs=1e-3)
+    # Symmetric optimum is an even split. Prices come from measured traffic,
+    # so allow for noise: across 10 seeds the worst deviation was ~2.0.
+    assert handler.x_ij == pytest.approx(np.full((2, 2), 20.0), abs=3.0)
+
+def test_splits_frozen_during_warmup():
+    np.random.seed(0)
+    topo = Topology(np.array([40.0]), np.array([[100.0, 100.0]]), np.array([100.0, 100.0]), ["P0"], ["SN1", "SN2"])
+    engine = SimulationEngine()
+    handler = SimulationHandler(engine, topo, SimulationState(1, 2, topo.mu_links, topo.mu_brokers),
+                                np.array([[40.0, 0.0]]), window=5.0, warmup_windows=4)
+    engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=0))
+
+    # Through the 4th window (t=20) the split must not move; the 5th adapts it
+    engine.run(duration=20.0, handler=handler.handle_event)
+    assert handler.x_ij.tolist() == [[40.0, 0.0]]
+    engine.run(duration=25.0, handler=handler.handle_event)
+    assert handler.x_ij[0, 1] > 0.0
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -1,19 +1,14 @@
-# Baseline 5x3 Experiment from Paper
-# Windowed stochastic simulation of the distributed pricing scheme
-# (notebook: SIM_DURATION_SEC, TIME_WINDOW, WARMUP_WINDOWS, ETA_SPLIT,
-# GAMMA_PRICE, BETA_LAMBDA)
+# Static distributed solver on the 5x3 baseline (no packets): reproduces the
+# notebook's convergence plots (dashboard_*.png). One iteration per window.
 simulation:
-  duration: 300   # 60 windows, as in the notebook
-  window: 5       # seconds per window; one price + routing update each
-  warmup: 4       # windows before sources start adapting their splits
-  mode: "synchronous"
+  duration: 100   # 100 iterations at window=1s
+  window: 1
+  mode: "static"
 
 algorithm:
-  gamma: 0.5      # price smoothing
-  eta: 0.35       # split inertia
-  beta: 0.3       # EWMA smoothing of measured broker arrival rates
-  eps: 1e-8
-  convergence_tol: 1e-10
+  gamma: 0.5
+  eta: 0.25
+  eps: 1e-12
 
 topology:
   sources:

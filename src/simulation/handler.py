@@ -5,45 +5,52 @@ import numpy as np
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
 from src.controller.best_response import best_response_mm1
-from src.controller.synchronous import compute_safe_step
-from src.model.marginal_costs import mm1_marginal_cost_vectorized
 from src.telemetry.metrics import TelemetryBuffer
 
 class SimulationHandler:
     """
     Processes simulation events and updates the system state.
+
+    The routing controller follows the notebook's windowed stochastic scheme
+    (WiOpt26JNSC_Extended.ipynb, "Windowed Stochastic simulation of the
+    DISTRIBUTED pricing scheme"). At the end of every window:
+      1. each broker updates an EWMA estimate of its *measured* arrival rate
+         and damps its price toward mu_j / (mu_j - Lambda_hat_j)^2;
+      2. after the warm-up windows, every source moves its split toward its
+         best response to the new prices (synchronously, with inertia eta).
     """
     def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None,
-                 eta: float = 0.25, gamma: float = 0.5, eps: float = 1e-12):
+                 eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
+                 window: float = 5.0, warmup_windows: int = 4, eps: float = 1e-9):
         self.engine = engine
         self.topology = topology
         self.state = state
         self.x_ij = x_ij # Current routing flows (rows sum to lambda_i)
         self.request_id_counter = 0
 
-        # Asynchronous Controller State
-        # eta: routing step size, gamma: price damping. Undamped (1.0, 1.0)
-        # best response can oscillate, flipping all flow between brokers.
-        self.eta = eta
-        self.gamma = gamma
+        # Controller parameters (notebook defaults: ETA_SPLIT, GAMMA_PRICE, BETA_LAMBDA)
+        self.eta = eta          # inertia on split updates
+        self.gamma = gamma      # smoothing on prices
+        self.beta = beta        # EWMA smoothing on measured broker arrival rates
+        self.window = window    # seconds per window (one controller iteration)
+        self.warmup_windows = warmup_windows  # windows before splits start adapting
         self.eps = eps
-        # Start from the marginal prices of the initial routing, as the
-        # synchronous reference does.
-        self.prices = mm1_marginal_cost_vectorized(self.x_ij.sum(axis=0), self.topology.mu_brokers, eps)
-        self.known_prices = np.tile(self.prices, (len(self.topology.sources), 1))
-        # Brokers each source has heard from this tick; it re-routes once all have reported
-        self.pending_prices = [set() for _ in self.topology.sources]
-        self.price_interval = 5.0 # Broadcast prices every 5 seconds
+
+        # Controller state; the notebook starts both estimates and prices at zero
+        n_brokers = len(self.topology.brokers)
+        self.window_arrivals = np.zeros(n_brokers)  # broker arrivals this window
+        self.lambda_hat = np.zeros(n_brokers)
+        self.prices = np.zeros(n_brokers)
+        self.window_idx = 0
 
         # Telemetry
         self.telemetry = telemetry
-        self.iteration = 0
         self.prev_x_ij = None
         self.prev_prices = None
 
-        # Schedule first controller tick
+        # First controller tick closes the first window
         self.engine.schedule(Event(
-            timestamp=0.0,
+            timestamp=self.window,
             event_type=EventType.CONTROLLER_TICK
         ))
 
@@ -62,12 +69,6 @@ class SimulationHandler:
             self._handle_broker_complete(event)
         elif event.event_type == EventType.CONTROLLER_TICK:
             self._handle_controller_tick(event)
-        elif event.event_type == EventType.PRICE_BROADCAST:
-            self._handle_price_broadcast(event)
-        elif event.event_type == EventType.PRICE_RECEIVED:
-            self._handle_price_received(event)
-        elif event.event_type == EventType.ROUTING_UPDATE:
-            self._handle_routing_update(event)
 
     def _handle_source_arrival(self, event: Event):
         # 1. Schedule next arrival for this source
@@ -153,6 +154,7 @@ class SimulationHandler:
         ))
 
     def _handle_broker_arrival(self, event: Event):
+        self.window_arrivals[event.broker_id] += 1
         queue = self.state.broker_queues[event.broker_id]
         if not queue.is_busy:
             self.engine.schedule(Event(
@@ -199,120 +201,65 @@ class SimulationHandler:
             queue.is_busy = False
 
     def _handle_controller_tick(self, event: Event):
-        # --- Telemetry Recording ---
+        mu_j = self.topology.mu_brokers
+
+        # 1. Brokers: EWMA of measured arrival rate -> damped price
+        inst_rate = self.window_arrivals / self.window
+        self.window_arrivals[:] = 0
+        self.lambda_hat = (1.0 - self.beta) * self.lambda_hat + self.beta * inst_rate
+        p_inst = mu_j / np.maximum(mu_j - self.lambda_hat, 1e-6)**2
+        self.prices = (1.0 - self.gamma) * self.prices + self.gamma * p_inst
+
+        # 2. Sources: after warm-up, move each split toward its best response
+        if self.window_idx >= self.warmup_windows:
+            for i in range(len(self.topology.sources)):
+                try:
+                    x_br = best_response_mm1(self.topology.mu_links[i, :], self.prices,
+                                             self.topology.lambdas_total[i])
+                except RuntimeError:
+                    continue  # keep the current split if the solver fails
+                self.x_ij[i, :] = (1.0 - self.eta) * self.x_ij[i, :] + self.eta * x_br
+
+        self.window_idx += 1
         if self.telemetry:
-            # Current broker loads: lambda_j = sum_i x_ij
-            lambda_j = np.sum(self.x_ij, axis=0)
-            mu_j = self.topology.mu_brokers
+            self._record_telemetry()
 
-            # Objective = sum(x_ij / (mu_ij - x_ij)) + sum(lambda_j / (mu_j - lambda_j))
-            diff_links = np.maximum(self.topology.mu_links - self.x_ij, 1e-6)
-            diff_brokers = np.maximum(mu_j - lambda_j, 1e-6)
-
-            obj = np.sum(self.x_ij / diff_links) + np.sum(lambda_j / diff_brokers)
-            max_util = np.max(lambda_j / mu_j)
-
-            # Controller residual since the last tick: max of relative routing
-            # and price change (same measure as synchronous.iteration_step)
-            rel_change = np.nan
-            if self.prev_x_ij is not None:
-                route_rel = np.linalg.norm(self.x_ij - self.prev_x_ij) / max(np.linalg.norm(self.prev_x_ij), self.eps)
-                price_rel = np.linalg.norm(self.prices - self.prev_prices) / max(np.linalg.norm(self.prev_prices), self.eps)
-                rel_change = max(route_rel, price_rel)
-
-            self.telemetry.record(
-                timestamp=self.engine.now,
-                iteration=self.iteration,
-                state_data={
-                    "objective": obj,
-                    "max_util": max_util,
-                    "rel_change": rel_change
-                }
-            )
-            self.prev_x_ij = self.x_ij.copy()
-            self.prev_prices = self.prices.copy()
-            self.iteration += 1
-
-            # LIVE UPDATE: Save to CSV every tick so the dashboard can read it
-            self.telemetry.save_to_csv("simulation_metrics.csv")
-
-        # Schedule price broadcasts for all brokers
-        for j in range(len(self.topology.brokers)):
-            self.engine.schedule(Event(
-                timestamp=self.engine.now,
-                event_type=EventType.PRICE_BROADCAST,
-                broker_id=j
-            ))
-
-        # Schedule next tick
         self.engine.schedule(Event(
-            timestamp=self.engine.now + self.price_interval,
+            timestamp=self.engine.now + self.window,
             event_type=EventType.CONTROLLER_TICK
         ))
 
-    def _handle_price_broadcast(self, event: Event):
-        broker_id = event.broker_id
-        mu_j = self.topology.mu_brokers[broker_id]
+    def _record_telemetry(self):
+        mu_j = self.topology.mu_brokers
+        planned_j = self.x_ij.sum(axis=0)
 
-        # Current load lambda_j = sum_i x_ij
-        lambda_j = np.sum(self.x_ij[:, broker_id])
+        # Analytic M/M/1 objective of the current routing:
+        # sum(x_ij / (mu_ij - x_ij)) + sum(lambda_j / (mu_j - lambda_j))
+        diff_links = np.maximum(self.topology.mu_links - self.x_ij, 1e-6)
+        diff_brokers = np.maximum(mu_j - planned_j, 1e-6)
+        obj = np.sum(self.x_ij / diff_links) + np.sum(planned_j / diff_brokers)
 
-        # Damped price: p_j <- (1-gamma) p_j + gamma * mu_j / (mu_j - lambda_j)^2
-        p_hat = mm1_marginal_cost_vectorized(lambda_j, mu_j, self.eps)
-        price = (1.0 - self.gamma) * self.prices[broker_id] + self.gamma * p_hat
+        # Controller residual since the last window: max of relative routing
+        # and price change (same measure as synchronous.iteration_step)
+        rel_change = np.nan
+        if self.prev_x_ij is not None:
+            route_rel = np.linalg.norm(self.x_ij - self.prev_x_ij) / max(np.linalg.norm(self.prev_x_ij), self.eps)
+            price_rel = np.linalg.norm(self.prices - self.prev_prices) / max(np.linalg.norm(self.prev_prices), self.eps)
+            rel_change = max(route_rel, price_rel)
+        self.prev_x_ij = self.x_ij.copy()
+        self.prev_prices = self.prices.copy()
 
-        self.prices[broker_id] = price
+        self.telemetry.record(
+            timestamp=self.engine.now,
+            iteration=self.window_idx,
+            state_data={
+                "objective": obj,
+                # Measured (EWMA) utilization, as plotted in the notebook
+                "max_util": np.max(self.lambda_hat / mu_j),
+                "max_util_planned": np.max(planned_j / mu_j),
+                "rel_change": rel_change,
+            }
+        )
 
-        # Broadcast to all sources
-        for i in range(len(self.topology.sources)):
-            self.engine.schedule(Event(
-                timestamp=self.engine.now,
-                event_type=EventType.PRICE_RECEIVED,
-                source_id=i,
-                broker_id=broker_id,
-                payload=price
-            ))
-
-    def _handle_price_received(self, event: Event):
-        source_id = event.source_id
-        broker_id = event.broker_id
-        price = event.payload
-
-        # Update known prices for this source
-        self.known_prices[source_id, broker_id] = price
-
-        # Re-route once per tick, after every broker's price has arrived
-        pending = self.pending_prices[source_id]
-        pending.add(broker_id)
-        if len(pending) == len(self.topology.brokers):
-            pending.clear()
-            self.engine.schedule(Event(
-                timestamp=self.engine.now,
-                event_type=EventType.ROUTING_UPDATE,
-                source_id=source_id
-            ))
-
-    def _handle_routing_update(self, event: Event):
-        source_id = event.source_id
-        lam_i = self.topology.lambdas_total[source_id]
-
-        # Get mu for this source (row in mu_links)
-        mu_row = self.topology.mu_links[source_id, :]
-
-        # Use known prices for this source
-        p = self.known_prices[source_id, :]
-
-        # Solve best response
-        try:
-            x_br = best_response_mm1(mu_row, p, lam_i)
-        except RuntimeError:
-            # If it fails to converge, keep current routing
-            return
-
-        # Damped move toward the best response, capped so no broker is
-        # pushed past capacity given the other sources' current flows
-        x_i = self.x_ij[source_id:source_id + 1, :]
-        loads = self.x_ij.sum(axis=0)
-        s = compute_safe_step(x_i, x_br[None, :], loads, self.topology.mu_brokers, self.eps)
-        step = self.eta * s
-        self.x_ij[source_id, :] = (1.0 - step) * x_i[0] + step * x_br
+        # LIVE UPDATE: Save to CSV every tick so the dashboard can read it
+        self.telemetry.save_to_csv("simulation_metrics.csv")

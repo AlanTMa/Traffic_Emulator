@@ -60,8 +60,12 @@ def render_dashboard():
 
         # Bottom Row: Utilization
         st.subheader("Max Broker Utilization")
-        fig_util = px.line(df, x='iteration', y='max_util',
-                         labels={'iteration': 'Iteration', 'max_util': 'Utilization'},
+        # Measured (EWMA of arrivals) vs planned (routing / capacity); older
+        # metrics files only have max_util
+        util_cols = {'max_util': 'Measured', 'max_util_planned': 'Planned'}
+        df_util = df.rename(columns=util_cols)
+        fig_util = px.line(df_util, x='iteration', y=[c for k, c in util_cols.items() if k in df],
+                         labels={'iteration': 'Iteration', 'value': 'Utilization', 'variable': ''},
                          title="Max Utilization over Time")
         st.plotly_chart(fig_util, width="stretch", key="chart_utilization")
 
