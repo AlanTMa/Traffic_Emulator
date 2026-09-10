@@ -19,7 +19,23 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      # Full suite, including the exact 5x3 regression gate
-      # (tests/regression/test_baseline_5x3.py) and the event-simulation tests
+      # Full suite: exact 5x3 regression gate, notebook batteries (slow),
+      # event simulation, and live multi-process distributed runs
       - name: Run tests
         run: python -m pytest -v
+
+  docker-smoke:
+    # The distributed emulator under Docker Compose: 1 controller, 3 broker and
+    # 5 source containers on the exact 5x3 topology for ~40 s.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run the distributed emulator in containers (the one-command launcher)
+        run: python -m src.cli up --backend docker --no-dashboard --duration 40 --window 2 --output-dir runs/ci
+      - name: Check the containers' rounds against the in-process reference
+        run: python -m scripts.verify_distributed_run runs/ci
