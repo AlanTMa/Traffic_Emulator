@@ -10,6 +10,7 @@ the windowed split inertia) contributes only its topology, window and seed,
 and Algorithm 1 uses the paper's Sec. V-A values (eta 0.25, gamma 0.5,
 delta_s 1e-8). Every substitution is reported and recorded.
 """
+from src.controller.synchronous import SAFE_STEP_VARIANTS
 from src.model.config import controller_mode
 from src.runtime.metadata import resolve_seed
 
@@ -38,6 +39,8 @@ def distributed_settings(config: dict, overrides: dict = None) -> dict:
         if value is not None:
             params[key] = float(value) if key != "safe_step_variant" else value
             notes.append(f"{key} overridden: {value}")
+    if params["safe_step_variant"] not in SAFE_STEP_VARIANTS:
+        raise ValueError(f"algorithm.safe_step_variant must be one of {SAFE_STEP_VARIANTS}")
     return {"params": params, "seed": resolve_seed(config), "notes": notes,
             "controller_mode": "capacity_safe_event_driven", "execution_backend": "distributed"}
 
