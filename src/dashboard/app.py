@@ -121,7 +121,9 @@ if RUN_CONFIG.exists() and holder["label"]:
 # --- Live charts ---
 
 VIEWS = ["Overview", "Brokers", "Routing", "Optimality", "Queues & latency"]
-view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
+# Read inside the fragment from session state: fragment reruns must use the
+# current selection, not a value captured by an earlier full run.
+st.segmented_control("View", VIEWS, default="Overview", key="view")
 
 def load_data():
     # Incremental: each refresh parses only the rows appended since the last one
@@ -413,7 +415,7 @@ def render_dashboard():
         if df.attrs["total_rows"] > len(df):
             st.caption(f"Showing the latest {len(df):,} of {df.attrs['total_rows']:,} iterations; "
                        f"the full log is {METRICS_FILE.relative_to(PROJECT_ROOT)}.")
-        RENDERERS[view](df)
+        RENDERERS[st.session_state.get("view") or "Overview"](df)
     elif is_running(holder):
         st.info("Simulation started; the first point appears after the first window.")
     else:
