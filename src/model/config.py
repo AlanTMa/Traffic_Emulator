@@ -1,6 +1,7 @@
 """
 Configuration loader for the emulator.
 """
+import copy
 import yaml
 from pathlib import Path
 from src.model.topology import Topology
@@ -22,6 +23,14 @@ import numpy as np
 CONTROLLER_MODES = ("static_algorithm1", "windowed_stochastic", "capacity_safe_event_driven")
 _LEGACY_MODES = {"static": "static_algorithm1", "synchronous": "windowed_stochastic",
                  "asynchronous": "windowed_stochastic"}
+ALGORITHM1_MODES = ("static_algorithm1", "capacity_safe_event_driven")
+# Algorithm parameters of each mode when a config does not give them: the paper's
+# Sec. V-A values for Algorithm 1, the notebook's cell 14 values for the windowed scheme
+MODE_DEFAULTS = {
+    "static_algorithm1": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12},
+    "capacity_safe_event_driven": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12, "beta": 0.3},
+    "windowed_stochastic": {"eta": 0.35, "gamma": 0.5, "beta": 0.3},
+}
 
 class _UniqueKeyLoader(yaml.SafeLoader):
     """SafeLoader that rejects duplicate mapping keys (PyYAML keeps the last one silently)."""
@@ -53,6 +62,30 @@ def controller_mode(config: dict) -> str:
     if mode not in CONTROLLER_MODES:
         raise ValueError(f"unknown controller_mode {mode!r}; expected one of {CONTROLLER_MODES}")
     return mode
+
+def with_controller_mode(config: dict, mode: str) -> dict:
+    """
+    A copy of the config that runs under controller mode `mode`.
+
+    A config's algorithm section is written for its own mode, and the same name
+    can mean different things: eta is the split inertia in windowed_stochastic
+    but the Algorithm 1 step size in the other two modes. Switching between the
+    two Algorithm 1 modes keeps the parameters; any other switch replaces them
+    with the new mode's defaults (MODE_DEFAULTS).
+    """
+    if mode not in CONTROLLER_MODES:
+        raise ValueError(f"unknown controller_mode {mode!r}; expected one of {CONTROLLER_MODES}")
+    current = controller_mode(config)
+    config = copy.deepcopy(config)
+    simulation = config.get("simulation") or {}
+    simulation.pop("mode", None)                                   # legacy key
+    simulation["controller_mode"] = mode
+    config["simulation"] = simulation
+    if mode != current:
+        keep = current in ALGORITHM1_MODES and mode in ALGORITHM1_MODES
+        previous = config.get("algorithm") or {}
+        config["algorithm"] = {k: previous.get(k, v) if keep else v for k, v in MODE_DEFAULTS[mode].items()}
+    return config
 
 def topology_from_config(config: dict) -> Topology:
     """

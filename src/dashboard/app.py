@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from src.controller.diagnostics import DEFAULT_TOLERANCES
-from src.model.config import load_config
+from src.model.config import controller_mode, load_config, with_controller_mode
 from src.model.generate import generate_topology_config
 from src.telemetry.metrics import JsonlTail
 
@@ -155,6 +155,14 @@ else:
         else:
             config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
             config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
+            try:
+                config_mode = controller_mode(load_config(config_file))
+            except (OSError, ValueError):
+                config_mode = "windowed_stochastic"
+            modes = list(MODE_HELP)
+            file_mode = st.selectbox("Controller mode", modes, index=modes.index(config_mode),
+                                     format_func=lambda m: MODE_HELP[m][0], key="config_mode",
+                                     help="Another mode than the config's runs with that mode's default parameters")
 
         launch_col, stop_col = st.columns(2)
         if launch_col.button("Launch", type="primary", width="stretch"):
@@ -171,8 +179,8 @@ else:
                               "topology": generate_topology_config(n_sources, n_brokers, load, int(seed))}
                     label = f"Generated {n_sources}×{n_brokers}, load {load:.0%}, seed {seed}"
                 else:
-                    config = load_config(config_file)
-                    label = config_file.name
+                    config = with_controller_mode(load_config(config_file), file_mode)
+                    label = f"{config_file.name} ({MODE_HELP[file_mode][0]})"
                 launch_simulation(holder, config, label)
                 st.rerun()
             except ValueError as e:

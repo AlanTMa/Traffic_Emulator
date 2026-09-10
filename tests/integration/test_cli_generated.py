@@ -1,10 +1,13 @@
 import json
 import sys
 
+import numpy as np
 import pytest
 import yaml
 
 from src import cli
+from src.controller.synchronous import run_algorithm1
+from src.model.config import load_config, topology_from_config, with_controller_mode
 
 def run_cli(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["src.cli", "run", *argv])
@@ -29,6 +32,24 @@ def test_generated_run_is_reproducible_from_its_config(monkeypatch, tmp_path, co
     again = tmp_path / "again"
     run_cli(monkeypatch, "--config", str(out / "generated_config.yaml"), "--no-realtime", "--output-dir", str(again))
     assert rows(out) == rows(again) and len(rows(out)) == 10
+
+def test_config_run_can_switch_controller_mode(monkeypatch, tmp_path):
+    # The canonical 5x3 (written for windowed_stochastic, eta = split inertia 0.35) under static Algorithm 1
+    out = tmp_path / "static"
+    run_cli(monkeypatch, "--config", "config/paper_5x3.yaml", "--controller", "static_algorithm1",
+            "--window", "1", "--duration", "70", "--no-realtime", "--output-dir", str(out))
+    cfg = yaml.safe_load((out / "resolved_config.yaml").read_text())
+    assert cfg["simulation"]["controller_mode"] == "static_algorithm1"
+    assert cfg["algorithm"] == {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12}
+    topo = topology_from_config(load_config("config/paper_5x3.yaml"))
+    ref = run_algorithm1(topo, eta=0.25, gamma=0.5, tol=0.0, max_iter=70, delta_s=1e-8, eps=1e-12)
+    last = rows(out)[-1]
+    assert len(rows(out)) == 70 and np.array_equal(np.array(last["lambda_ij"]), ref.lambda_ij)
+    assert last["objective"] == pytest.approx(2.0157473649139757, rel=0, abs=1e-12)   # notebook F_dist, 70 iterations
+
+    # Switching between the two Algorithm 1 modes keeps the parameters
+    switched = with_controller_mode({**cfg, "algorithm": {**cfg["algorithm"], "eta": 0.1}}, "capacity_safe_event_driven")
+    assert switched["algorithm"]["eta"] == 0.1 and switched["algorithm"]["beta"] == 0.3
 
 def test_mode_parameter_overrides(monkeypatch, tmp_path):
     out = tmp_path / "o"
