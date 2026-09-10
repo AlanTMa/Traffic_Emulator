@@ -13,12 +13,13 @@ class SystemState:
         lambda_ij: (N, M) Current routing allocation.
         prices: (M,) Current broker congestion prices.
         iteration: Current controller iteration.
+        s_t: Common safe step used by the last iteration (nan before any).
+        route_rel: Relative routing change of the last iteration.
+        price_rel: Relative price change of the last iteration.
     """
     lambda_ij: np.ndarray
     prices: np.ndarray
     iteration: int = 0
-
-    def __post_init__(self):
-        if self.lambda_ij.shape != self.prices.shape[0] if self.prices.ndim == 1 else self.lambda_ij.shape[0]:
-             # Basic validation is handled by Topology and Controller, but we keep it here.
-             pass
+    s_t: float = np.nan
+    route_rel: float = np.nan
+    price_rel: float = np.nan

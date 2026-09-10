@@ -4,6 +4,7 @@ Synchronous implementation of the WiOpt distributed routing algorithm.
 import numpy as np
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
 from src.controller.best_response import best_response_mm1
+from src.controller.feasibility import transportation_feasibility
 from src.simulation.state import SystemState
 
 def compute_broker_loads(lambda_ij: np.ndarray) -> np.ndarray:
@@ -81,6 +82,29 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     state.lambda_ij = new_lambda_ij
     state.prices = new_prices
     state.iteration += 1
+    state.s_t, state.route_rel, state.price_rel = s_t, route_rel, price_rel
 
     return state, s_t, max(route_rel, price_rel)
+
+def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float = 1e-10, max_iter: int = 4000,
+                   eps: float = 1e-12, delta_s: float = 1e-8, initial_lambda: np.ndarray = None) -> SystemState:
+    """
+    Run Algorithm 1 from an LP-certified initial routing (maximum-headroom
+    transportation LP with margin delta_s) and model prices at that routing,
+    until max(route_rel, price_rel) < tol or max_iter iterations.
+
+    Matches the reference notebook's distributed_flow_weighted() loop, except
+    for the safe step, which follows the paper (see compute_safe_step).
+    """
+    if initial_lambda is None:
+        initial_lambda = transportation_feasibility(topology.lambdas_total, topology.mu_links,
+                                                    topology.mu_brokers, margin=delta_s)
+    loads = compute_broker_loads(initial_lambda)
+    state = SystemState(lambda_ij=np.array(initial_lambda, dtype=float),
+                        prices=mm1_marginal_cost_vectorized(loads, topology.mu_brokers, eps))
+    for _ in range(max_iter):
+        state, _, residual = iteration_step(state, topology, eta, gamma, eps=eps, delta_s=delta_s)
+        if residual < tol:
+            break
+    return state
 

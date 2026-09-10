@@ -1,71 +1,83 @@
+"""
+5x3 regression gate against the ANRG reference notebook.
+
+The expected values in data/baseline_5x3.json were produced by running the
+notebook's own functions on its exact seed-42 instance (see "provenance" in
+the file). The canonical objective is F* = 2.0157473649138 (notebook-printed).
+The value 2.015766 that earlier versions of this test asserted comes from
+running the same algorithm on the instance rounded to 3 decimals (e.g.
+lambda_P2 = 30.059 instead of 30.05859375); it is not a paper value.
+"""
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
+
+from src.controller.central import solve_central, system_objective
+from src.controller.synchronous import run_algorithm1
 from src.model.topology import Topology
-from src.simulation.state import SystemState
-from src.controller.synchronous import iteration_step
-from src.controller.feasibility import transportation_feasibility
-from src.model.marginal_costs import mm1_marginal_cost_vectorized
 
-def test_reproduce_5x3_baseline():
-    # 5 Producers, 3 Brokers
-    sources = [f"P{i}" for i in range(5)]
-    brokers = [f"SN{i+1}" for i in range(3)]
+BASELINE = json.loads((Path(__file__).parent / "data" / "baseline_5x3.json").read_text())
+PARAMS = BASELINE["parameters"]
+EXPECTED = BASELINE["distributed"]
 
-    # Exact Notebook Values
-    lambdas_total = np.array([0.156, 0.098, 30.059, 30.010, 0.107])
+@pytest.fixture(scope="module")
+def topology():
+    return Topology(np.array(PARAMS["lambdas_total"]), np.array(PARAMS["mu_links"]),
+                    np.array(PARAMS["mu_brokers"]), [f"P{i}" for i in range(5)], ["SN1", "SN2", "SN3"])
 
-    # MU_links (P x B)
-    mu_links = np.array([
-        [47.491, 54.640, 43.120],
-        [41.162, 52.022, 40.412],
-        [56.649, 43.636, 46.085],
-        [48.639, 52.237, 45.843],
-        [49.121, 43.993, 51.848]
-    ])
+@pytest.fixture(scope="module")
+def distributed(topology):
+    return run_algorithm1(topology, eta=PARAMS["eta"], gamma=PARAMS["gamma"], tol=PARAMS["tol"],
+                          max_iter=PARAMS["max_iter"], delta_s=PARAMS["delta_s"])
 
-    # MU_brokers
-    mu_brokers = np.array([160.754, 106.505, 196.563])
+@pytest.fixture(scope="module")
+def central(topology):
+    return solve_central(topology.lambdas_total, topology.mu_links, topology.mu_brokers, margin=PARAMS["delta_s"])
 
-    topo = Topology(lambdas_total, mu_links, mu_brokers, sources, brokers)
+def test_iterations_match_notebook(distributed):
+    assert distributed.iteration == EXPECTED["iterations"]
 
-    # Initialization: Feasible L0
-    L0 = transportation_feasibility(lambdas_total, mu_links, mu_brokers)
+def test_routing_matrix(distributed):
+    assert distributed.lambda_ij == pytest.approx(np.array(EXPECTED["lambda_ij"]), abs=1e-9)
 
-    # Initial prices from L0
-    loads = L0.sum(axis=0)
-    p0 = mu_brokers / (mu_brokers - loads)**2
+def test_source_conservation(distributed, topology):
+    assert np.max(np.abs(distributed.lambda_ij.sum(axis=1) - topology.lambdas_total)) <= 1e-8
 
-    state = SystemState(lambda_ij=L0, prices=p0)
+def test_broker_loads_and_utilization(distributed, topology):
+    loads = distributed.lambda_ij.sum(axis=0)
+    assert loads == pytest.approx(np.array(EXPECTED["broker_loads"]), abs=1e-9)
+    assert loads / topology.mu_brokers == pytest.approx(np.array(EXPECTED["broker_utilization"]), abs=1e-11)
+    assert np.all(loads <= topology.mu_brokers - PARAMS["delta_s"])
 
-    # Algorithm Parameters
-    eta = 0.25
-    gamma = 0.50
-    tol = 1e-10
-    max_iter = 4000
+def test_advertised_prices(distributed):
+    assert distributed.prices == pytest.approx(np.array(EXPECTED["prices"]), rel=1e-9)
 
-    # Run the synchronous loop until convergence
-    for i in range(max_iter):
-        state, s_t, rel_change = iteration_step(state, topo, eta, gamma)
+def test_active_route_set(distributed):
+    active = (distributed.lambda_ij > 1e-7).astype(int)
+    assert active.tolist() == EXPECTED["active_routes"]
+    # P0, P1, P4 use only SN3; P2, P3 use all three brokers
+    assert active.tolist() == [[0, 0, 1], [0, 0, 1], [1, 1, 1], [1, 1, 1], [0, 0, 1]]
 
-        if rel_change < tol:
-            break
+def test_objective(distributed, topology):
+    obj = system_objective(distributed.lambda_ij, topology.mu_links, topology.mu_brokers)
+    assert obj == pytest.approx(EXPECTED["objective"], abs=1e-12)
+    assert obj == pytest.approx(2.0157473649138, abs=1e-12)
 
+def test_final_route_and_price_residuals(distributed):
+    assert distributed.route_rel < PARAMS["tol"]
+    assert distributed.price_rel < PARAMS["tol"]
 
-    # Verification against notebook baseline
-    # F_dist approx 2.015747
-    # Using the a-priori objective formula: sum (L / (mu-L)) + sum (Lambda / (mu-Lambda))
-    l_mat = state.lambda_ij
-    loads_final = l_mat.sum(axis=0)
+def test_centralized_matches_notebook(central):
+    L_c, info = central
+    assert info["kkt_polish_residual"] is not None
+    assert info["objective"] == pytest.approx(BASELINE["central"]["objective"], abs=1e-12)
+    assert L_c == pytest.approx(np.array(BASELINE["central"]["lambda_ij"]), abs=1e-9)
 
-    obj = np.sum(l_mat / (mu_links - l_mat)) + np.sum(loads_final / (mu_brokers - loads_final))
-
-    print(f"\nFinal Objective: {obj:.6f}")
-    assert obj == pytest.approx(2.015766, abs=1e-5)
-
-    # Check Broker Utilizations
-    utils = loads_final / mu_brokers
-    print(f"Broker Utils: {utils}")
-    # SN1: 0.1581, SN2: 0.1386, SN3: 0.1030
-    assert utils[0] == pytest.approx(0.1581, abs=1e-3)
-    assert utils[1] == pytest.approx(0.1386, abs=1e-3)
-    assert utils[2] == pytest.approx(0.1030, abs=1e-3)
+def test_distributed_matches_centralized(distributed, central, topology):
+    _, info = central
+    F_d = system_objective(distributed.lambda_ij, topology.mu_links, topology.mu_brokers)
+    gap = (F_d - info["objective"]) / abs(info["objective"])
+    assert abs(gap) <= BASELINE["residual_tolerances"]["relative_objective_gap"]
+    assert distributed.lambda_ij == pytest.approx(central[0], abs=1e-7)
