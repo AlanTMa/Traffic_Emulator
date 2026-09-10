@@ -33,7 +33,9 @@ def run_simulation(lam: float, mu_link: float, mu_broker: float, trials: int = 3
         topo = Topology(lambdas_total, mu_links, mu_brokers, sources, brokers)
         engine = SimulationEngine()
         state = SimulationState(1, 1, mu_links, mu_brokers)
-        x_ij = np.array([[1.0]])
+        # Routing flows, not fractions: sum_j x_ij must equal lambda_i
+        x_ij = np.array([[lam]])
+        assert np.allclose(x_ij.sum(axis=1), lambdas_total)
         handler = SimulationHandler(engine, topo, state, x_ij)
 
         # Initial arrival
