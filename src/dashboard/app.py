@@ -22,9 +22,6 @@ from src.telemetry.metrics import JsonlTail
 
 st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
 
-st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
-st.markdown("Set up a topology in the sidebar and launch a simulation; charts update live from `runs/latest/metrics.jsonl`.")
-
 # Configuration
 RUN_DIR = PROJECT_ROOT / "runs"
 # Output directory the dashboard launches into and reads from; override with
@@ -39,6 +36,16 @@ RUN_LOG = OUTPUT_DIR / "dashboard.log"
 OBSERVER = os.environ.get("TRAFFIC_EMULATOR_OBSERVER") == "1"
 REFRESH_RATE = 2 # seconds
 MAX_ROWS = 3000  # most recent iterations kept for plotting
+
+st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
+try:
+    _shown = METRICS_FILE.resolve().relative_to(PROJECT_ROOT).as_posix()
+except ValueError:
+    _shown = METRICS_FILE.as_posix()
+if OBSERVER:
+    st.markdown(f"Observing a run started elsewhere; charts update live from `{_shown}`.")
+else:
+    st.markdown(f"Set up a topology in the sidebar and launch a simulation; charts update live from `{_shown}`.")
 
 MODE_HELP = {  # controller_mode -> (label, description)
     "windowed_stochastic": ("Windowed stochastic (notebook)",
