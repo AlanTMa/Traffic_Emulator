@@ -4,6 +4,7 @@ Synchronous implementation of the WiOpt distributed routing algorithm.
 import numpy as np
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
 from src.controller.best_response import best_response_mm1
+from src.controller.diagnostics import compute_diagnostics
 from src.controller.feasibility import transportation_feasibility
 from src.simulation.state import SystemState
 
@@ -93,13 +94,19 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     return state, s_t, max(route_rel, price_rel)
 
 def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float = 1e-10, max_iter: int = 4000,
-                   eps: float = 1e-12, delta_s: float = 1e-8, initial_lambda: np.ndarray = None) -> SystemState:
+                   eps: float = 1e-12, delta_s: float = 1e-8, initial_lambda: np.ndarray = None,
+                   require_certificate: bool = False) -> SystemState:
     """
     Run Algorithm 1 from an LP-certified initial routing (maximum-headroom
-    transportation LP with margin delta_s) and model prices at that routing,
-    until max(route_rel, price_rel) < tol or max_iter iterations.
+    transportation LP with margin delta_s) and model prices at that routing.
 
-    Matches the reference notebook's distributed_flow_weighted() loop, except
+    Stopping rule:
+      require_certificate=False (default): stop once max(route_rel, price_rel)
+        < tol, as the reference notebook's distributed_flow_weighted() does.
+      require_certificate=True: paper Algorithm 1 Step 5 - additionally require
+        the Proposition 1 certificate (price consistency, fixed point, KKT;
+        src/controller/diagnostics.py) to pass.
+    Either way at most max_iter iterations. Matches the notebook loop except
     for the safe step, which follows the paper (see compute_safe_step).
     """
     if initial_lambda is None:
@@ -110,7 +117,7 @@ def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float =
                         prices=mm1_marginal_cost_vectorized(loads, topology.mu_brokers, eps))
     for _ in range(max_iter):
         state, _, residual = iteration_step(state, topology, eta, gamma, eps=eps, delta_s=delta_s)
-        if residual < tol:
+        if residual < tol and (not require_certificate
+                               or compute_diagnostics(state.lambda_ij, state.prices, topology, eps=eps)["certified"]):
             break
     return state
-

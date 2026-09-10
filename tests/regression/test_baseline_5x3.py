@@ -126,3 +126,15 @@ def test_certificate_rejects_non_optimal_states(topology):
     early = run_algorithm1(topology, max_iter=5, delta_s=PARAMS["delta_s"])
     d5 = compute_diagnostics(early.lambda_ij, early.prices, topology)
     assert not d5["certified"] and "r_price" in d5["failed"]
+
+def test_step5_stopping_rule_certifies_at_high_load():
+    # At 95% of the largest feasible multiplier, stopping on route/price change
+    # alone (notebook rule) leaves KKT complementarity above its absolute
+    # tolerance; the paper's Step 5 rule keeps iterating until certified.
+    high = Topology(4.626 * np.array(PARAMS["lambdas_total"]), np.array(PARAMS["mu_links"]),
+                    np.array(PARAMS["mu_brokers"]), [f"P{i}" for i in range(5)], ["SN1", "SN2", "SN3"])
+    notebook_rule = run_algorithm1(high, tol=1e-10)
+    step5 = run_algorithm1(high, tol=1e-10, require_certificate=True)
+    assert not compute_diagnostics(notebook_rule.lambda_ij, notebook_rule.prices, high)["certified"]
+    assert compute_diagnostics(step5.lambda_ij, step5.prices, high)["certified"]
+    assert step5.iteration > notebook_rule.iteration
