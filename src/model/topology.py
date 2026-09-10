@@ -33,15 +33,46 @@ class Topology:
     brokers: list
 
     def __post_init__(self):
-        # Validate dimensions
-        n_sources = len(self.sources)
-        n_brokers = len(self.brokers)
+        """Validate dimensions, ids and values; raises ValueError on any problem."""
+        self.sources, self.brokers = list(self.sources), list(self.brokers)
+        n_sources, n_brokers = len(self.sources), len(self.brokers)
+        if n_sources == 0 or n_brokers == 0:
+            raise ValueError("a topology needs at least one source and one broker")
+        for kind, ids in (("source", self.sources), ("broker", self.brokers)):
+            if len(set(ids)) != len(ids):
+                dupes = sorted({str(x) for x in ids if ids.count(x) > 1})
+                raise ValueError(f"duplicate {kind} ids: {dupes}")
+
+        try:
+            self.lambdas_total = np.asarray(self.lambdas_total, dtype=float)
+            self.mu_links = np.asarray(self.mu_links, dtype=float)
+            self.mu_brokers = np.asarray(self.mu_brokers, dtype=float)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"topology rates and capacities must be numeric: {e}") from None
+
+        # Dimensions
         if self.lambdas_total.shape != (n_sources,):
             raise ValueError(f"lambdas_total shape {self.lambdas_total.shape} must be ({n_sources},)")
         if self.mu_links.shape != (n_sources, n_brokers):
             raise ValueError(f"mu_links shape {self.mu_links.shape} must be ({n_sources}, {n_brokers})")
         if self.mu_brokers.shape != (n_brokers,):
             raise ValueError(f"mu_brokers shape {self.mu_brokers.shape} must be ({n_brokers},)")
+
+        # Values: finite; rates >= 0; capacities > 0 (the M/M/1 model needs
+        # every access link and broker to serve at a positive rate)
+        for name, values in (("lambdas_total", self.lambdas_total), ("mu_links", self.mu_links),
+                             ("mu_brokers", self.mu_brokers)):
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"{name} contains NaN or infinite values")
+        if np.any(self.lambdas_total < 0):
+            bad = [self.sources[i] for i in np.where(self.lambdas_total < 0)[0]]
+            raise ValueError(f"source rates must be >= 0 (negative for {bad})")
+        if np.any(self.mu_links <= 0):
+            bad = [f"{self.sources[i]}->{self.brokers[j]}" for i, j in zip(*np.where(self.mu_links <= 0))]
+            raise ValueError(f"access capacities must be > 0 (not for {bad})")
+        if np.any(self.mu_brokers <= 0):
+            bad = [self.brokers[j] for j in np.where(self.mu_brokers <= 0)[0]]
+            raise ValueError(f"broker capacities must be > 0 (not for {bad})")
 
     @property
     def n_sources(self) -> int:
