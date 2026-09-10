@@ -35,3 +35,34 @@ def test_tail_resets_on_new_run(tmp_path):
     path.write_text('{"run": "b", "i": 0}\n{"run": "b", "i": 1}\n{"run": "b", "i": 2}\n')
     rows = tail.read()
     assert [r["run"] for r in rows] == ["b", "b", "b"] and tail.total_rows == 3
+
+def test_tail_detects_new_run_that_outgrows_old_offset(tmp_path):
+    # Records of every run start with the same long prefix; only the first
+    # record's wall_time tells runs apart. If the new run has already grown
+    # past the old offset, a prefix check would resume mid-record.
+    path = tmp_path / "metrics.jsonl"
+    prefix = '{"schema": 1, "controller_mode": "windowed_stochastic", "iteration": %d, "wall_time": %s, "x": "%s"}\n'
+    path.write_text("".join(prefix % (k, "100.0", "a" * 50) for k in range(3)))
+    tail = JsonlTail(path)
+    assert len(tail.read()) == 3
+    path.write_text("".join(prefix % (k, "200.0", "b" * 80) for k in range(6)))
+    rows = tail.read()
+    assert [r["wall_time"] for r in rows] == [200.0] * 6
+    assert tail.total_rows == 6
+
+def test_tail_first_seen_mid_write_then_new_run(tmp_path):
+    # The reader first sees run A's first record half-written (only the
+    # prefix shared by all runs), then A's complete records, then run B,
+    # which has already outgrown A's offset. B must be read from its start.
+    path = tmp_path / "metrics.jsonl"
+    record = '{"schema": 1, "controller_mode": "windowed_stochastic", "iteration": %d, "wall_time": %s}\n'
+    run_a = "".join(record % (k, "100.0") for k in range(3))
+    path.write_text(run_a[:40])
+    tail = JsonlTail(path)
+    assert tail.read() == []
+    path.write_text(run_a)
+    assert len(tail.read()) == 3
+    path.write_text("".join(record % (k, "200.0") for k in range(8)))
+    rows = tail.read()
+    assert [r["wall_time"] for r in rows] == [200.0] * 8
+    assert [r["iteration"] for r in rows] == list(range(8))

@@ -65,33 +65,42 @@ class JsonlTail:
         self.rows = deque(maxlen=max_rows)
         self.total_rows = 0
         self._offset = 0
-        self._head = b""
+        self._first_line = None   # identifies the run (records carry a wall_time)
 
     def _reset(self):
         self.rows.clear()
         self.total_rows = 0
         self._offset = 0
-        self._head = b""
+        self._first_line = None
 
     def read(self) -> List[Dict[str, Any]]:
+        for _ in range(2):  # a second pass after detecting a replaced file
+            try:
+                return self._read_new()
+            except ValueError:
+                # Unparseable data: the file was replaced under us; start over
+                self._reset()
+        return list(self.rows)
+
+    def _read_new(self) -> List[Dict[str, Any]]:
         if not self.path.exists():
             self._reset()
             return []
         with open(self.path, "rb") as f:
-            head = f.read(256)
+            first_line = f.readline()
             size = f.seek(0, 2)
-            # A different first record or a shorter file means a new run
-            if size < self._offset or (self._head and head[:len(self._head)] != self._head):
+            # A shorter file or a different first record means a new run.
+            # Compare complete first lines only: all runs share a long prefix.
+            if size < self._offset or (self._first_line is not None and first_line != self._first_line):
                 self._reset()
-            if not self._head:
-                self._head = head
+            if self._first_line is None and first_line.endswith(b"\n"):
+                self._first_line = first_line
             f.seek(self._offset)
             chunk = f.read()
         # Only consume complete lines; a partially written last line waits
         end = chunk.rfind(b"\n") + 1
-        for line in chunk[:end].splitlines():
-            if line.strip():
-                self.rows.append(json.loads(line))
-                self.total_rows += 1
+        parsed = [json.loads(line) for line in chunk[:end].splitlines() if line.strip()]
+        self.rows.extend(parsed)
+        self.total_rows += len(parsed)
         self._offset += end
         return list(self.rows)
