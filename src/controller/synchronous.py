@@ -47,14 +47,23 @@ def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.nd
     return max(0.0, float(np.min(safe_step_bounds(lambda_ij, lambda_br, loads, mu_brokers, eta, delta_s))))
 
 def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12,
-                   delta_s: float = 1e-8):
+                   delta_s: float = 1e-8, on_best_response_failure: str = "raise"):
     """
-    Perform one iteration of Algorithm 1.
+    Perform one iteration of Algorithm 1. Shared by static_algorithm1 and
+    capacity_safe_event_driven, so both modes run the same controller step.
 
     delta_s is the capacity margin kept below every broker's capacity by the
     safe step (paper: delta_s; the reference notebook uses 1e-8). eps only
     guards divisions against zero and is not a modeling parameter.
+
+    on_best_response_failure: "raise" (default) propagates a best-response
+    solver failure; "hold" keeps that source's current split for this step
+    (its Delta_ij = 0, so the safe step still bounds the others) and lists
+    the source index in state.br_failures, for long event runs that must
+    record, not hide, such failures.
     """
+    if on_best_response_failure not in ("raise", "hold"):
+        raise ValueError(f"on_best_response_failure must be 'raise' or 'hold', not {on_best_response_failure!r}")
     l_prev = state.lambda_ij.copy()
     p_prev = state.prices.copy()
 
@@ -66,12 +75,19 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
 
     # 3. Each source solves best response
     lambda_br = np.zeros_like(state.lambda_ij)
+    br_failures = []
     for i in range(topology.n_sources):
-        lambda_br[i, :] = best_response_mm1(
-            topology.mu_links[i, :],
-            new_prices,
-            topology.lambdas_total[i]
-        )
+        try:
+            lambda_br[i, :] = best_response_mm1(
+                topology.mu_links[i, :],
+                new_prices,
+                topology.lambdas_total[i]
+            )
+        except RuntimeError:
+            if on_best_response_failure == "raise":
+                raise
+            lambda_br[i, :] = state.lambda_ij[i, :]
+            br_failures.append(i)
 
     # 4. Calculate safe step
     s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s)
@@ -90,8 +106,23 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     state.prices = new_prices
     state.iteration += 1
     state.s_j, state.s_t, state.route_rel, state.price_rel = s_j, s_t, route_rel, price_rel
+    state.br_failures = br_failures
 
     return state, s_t, max(route_rel, price_rel)
+
+def algorithm1_initial_state(topology, delta_s: float = 1e-8, eps: float = 1e-12,
+                             initial_lambda: np.ndarray = None) -> SystemState:
+    """
+    Algorithm 1 initialization: an LP-certified routing with
+    Lambda_j <= mu_j - delta_s (maximum-headroom transportation LP), unless
+    given, and model prices p_j = C_j(Lambda_j) at that routing.
+    """
+    if initial_lambda is None:
+        initial_lambda = transportation_feasibility(topology.lambdas_total, topology.mu_links,
+                                                    topology.mu_brokers, margin=delta_s)
+    loads = compute_broker_loads(initial_lambda)
+    return SystemState(lambda_ij=np.array(initial_lambda, dtype=float),
+                       prices=mm1_marginal_cost_vectorized(loads, topology.mu_brokers, eps))
 
 def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float = 1e-10, max_iter: int = 4000,
                    eps: float = 1e-12, delta_s: float = 1e-8, initial_lambda: np.ndarray = None,
@@ -109,12 +140,7 @@ def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float =
     Either way at most max_iter iterations. Matches the notebook loop except
     for the safe step, which follows the paper (see compute_safe_step).
     """
-    if initial_lambda is None:
-        initial_lambda = transportation_feasibility(topology.lambdas_total, topology.mu_links,
-                                                    topology.mu_brokers, margin=delta_s)
-    loads = compute_broker_loads(initial_lambda)
-    state = SystemState(lambda_ij=np.array(initial_lambda, dtype=float),
-                        prices=mm1_marginal_cost_vectorized(loads, topology.mu_brokers, eps))
+    state = algorithm1_initial_state(topology, delta_s, eps, initial_lambda)
     for _ in range(max_iter):
         state, _, residual = iteration_step(state, topology, eta, gamma, eps=eps, delta_s=delta_s)
         if residual < tol and (not require_certificate

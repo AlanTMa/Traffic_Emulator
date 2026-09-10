@@ -16,9 +16,7 @@ from src.simulation.handler import SimulationHandler
 from src.controller.feasibility import transportation_feasibility
 from src.telemetry.metrics import TelemetryBuffer
 from src.telemetry.schema import controller_snapshot
-from src.controller.synchronous import iteration_step
-from src.simulation.state import SystemState
-from src.model.marginal_costs import mm1_marginal_cost_vectorized
+from src.controller.synchronous import algorithm1_initial_state, iteration_step
 from src.runtime.metadata import resolve_seed, write_run_metadata
 
 # Global flag for graceful shutdown
@@ -120,10 +118,8 @@ def run_static(topo, params, duration, telemetry, real_time):
     """
     eta, gamma, eps, delta_s, window = (params[k] for k in ("eta", "gamma", "eps", "delta_s", "window"))
 
-    # Algorithm 1 requires an initial routing with Lambda_j <= mu_j - delta_s
-    x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers, margin=delta_s)
-    loads = x_ij.sum(axis=0)
-    state = SystemState(lambda_ij=x_ij, prices=mm1_marginal_cost_vectorized(loads, topo.mu_brokers, eps))
+    # Algorithm 1 initialization: LP routing with Lambda_j <= mu_j - delta_s, model prices
+    state = algorithm1_initial_state(topo, delta_s, eps)
     wall_start = time.perf_counter()
     n_iter = None if np.isinf(duration) else round(duration / window)
     for k in itertools.count(1):
