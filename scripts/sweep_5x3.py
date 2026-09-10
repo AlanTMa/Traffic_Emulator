@@ -14,9 +14,15 @@ For every r:
      objective increases (oscillation), gap to the centralized solver.
   B. Event simulation of the optimum routing A with the controller frozen:
      queueing validation (measured work-unit sojourn times vs the M/M/1 model).
-  C. Event simulation under the windowed_stochastic controller from the LP
-     initializer: measured utilization, queues, latency percentiles, residuals,
-     route oscillation.
+  C. capacity_safe_event_driven: event-driven queues with Algorithm 1 steps
+     on planned rates: planned utilization and capacity feasibility, safe-step
+     activity, queue occupancy and growth, sojourn distribution.
+  D. windowed_stochastic from the LP initializer: EWMA-measured utilization,
+     planned routing, queues, latency distribution, planned-overload windows.
+
+Utilization is reported per broker and per access path, planned (lambda_ij /
+mu_ij, Lambda_j / mu_j) and actual (measured arrival rates averaged after the
+warm-up) - never as total offered traffic over total capacity alone.
 
 Usage:
     python -m scripts.sweep_5x3 [--fractions 0.2,0.5,0.7,0.8,0.9,0.95]
@@ -69,14 +75,25 @@ def main():
               f"util_j={np.round(static['util_j'], 3)}, max access util={static['max_access_util']:.3f}, "
               f"certified={static['certified']}, s_t<1 in {static['safe_step_binding_iterations']} it")
         if not args.skip_events:
-            for name, mode, x0 in (("optimum_frozen", "frozen", L_opt), ("windowed", "windowed_stochastic", None)):
+            for name, mode, x0 in (("optimum_frozen", "frozen", L_opt),
+                                   ("capacity_safe", "capacity_safe_event_driven", None),
+                                   ("windowed", "windowed_stochastic", None)):
                 ev = event_experiment(topo, mode, x0=x0, duration=args.duration,
                                       warmup_time=args.warmup_time, seed=args.seed * 1000 + k)
                 row[name] = ev
-                print(f"  {name:>15}: mean {ev['latency_mean']:.4f}s (model {ev['model_mean_sojourn']:.4f}s), "
-                      f"p95 {ev['latency_p95']:.4f}, p99 {ev['latency_p99']:.4f}, "
-                      f"measured util_j={np.round(ev['util_measured_j'], 3)}, max broker queue {ev['queue_broker_max']}, "
-                      f"max access queue {ev['queue_access_max']}, fraction std {ev['fraction_std']:.4f}")
+                steps = (f", s_t<1 in {ev['safe_step_binding_windows']} windows (min {ev['min_s_t']:.3f})"
+                         if ev["min_s_t"] is not None else f", planned overload windows {ev['planned_broker_overload_windows']}")
+                print(f"  {name:>15}: mean {ev['latency_mean']:.4f}s (model {ev['model_mean_sojourn']:.4f}s, "
+                      f"{ev['latency_vs_model']:+.1%}), p95 {ev['latency_p95']:.4f}, p99 {ev['latency_p99']:.4f}\n"
+                      f"{'':>19}util planned {np.round(ev['util_planned_j'], 3)} actual {np.round(ev['util_actual_j'], 3)}, "
+                      f"max access util planned {ev['max_access_util_planned']:.3f} "
+                      f"actual {np.max(ev['access_util_actual_ij']):.3f}\n"
+                      f"{'':>19}min planned headroom broker {ev['min_planned_broker_headroom']:.3g} "
+                      f"link {ev['min_planned_link_headroom']:.3g}{steps}\n"
+                      f"{'':>19}queues max broker {ev['queue_broker_max']} access {ev['queue_access_max']}, "
+                      f"growth {ev['queue_growth']:.2f}, fraction std {ev['fraction_std']:.4f}, "
+                      # frozen routing has no controller, so no meaningful certificate
+                      f"certified {ev['certified'] if mode != 'frozen' else 'n/a'}")
         results.append(row)
 
     out = Path(args.output_dir)

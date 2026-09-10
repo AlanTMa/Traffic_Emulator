@@ -69,6 +69,7 @@ class SimulationHandler:
         # Controller state; the notebook starts both estimates and prices at zero
         n_brokers = len(self.topology.brokers)
         self.window_arrivals = np.zeros(n_brokers)  # broker arrivals this window
+        self.window_access_arrivals = np.zeros((len(self.topology.sources), n_brokers))  # per access link
         # End-to-end latencies (source, latency) of requests completed this window
         self.window_latencies = []
         # Optional caller-owned list receiving (completion_time, source, latency)
@@ -142,6 +143,7 @@ class SimulationHandler:
             probs = np.ones(len(self.topology.brokers)) / len(self.topology.brokers)
 
         broker_id = int(self.rng.choice(len(self.topology.brokers), p=probs))
+        self.window_access_arrivals[event.source_id, broker_id] += 1
 
         # 3. Work-unit tracking
         req_id = self.request_id_counter
@@ -264,7 +266,11 @@ class SimulationHandler:
     def _handle_controller_tick(self, event: Event):
         # Measured EWMA of broker arrival rates over the window just closed
         inst_rate = self.window_arrivals / self.window
+        # Raw (unsmoothed) measured rates of the window, recorded in telemetry
+        self.last_broker_rate = inst_rate.copy()
+        self.last_access_rate = self.window_access_arrivals / self.window
         self.window_arrivals[:] = 0
+        self.window_access_arrivals[:] = 0
         self.lambda_hat = (1.0 - self.beta) * self.lambda_hat + self.beta * inst_rate
 
         if self.controller_mode == "capacity_safe_event_driven":
@@ -328,6 +334,10 @@ class SimulationHandler:
             # Measured: EWMA of broker arrival rates, as plotted in the notebook
             lambda_hat_j=self.lambda_hat.copy(),
             util_measured_j=self.lambda_hat / self.topology.mu_brokers,
+            # Raw per-window measured arrival rates and utilizations
+            broker_rate_measured_j=self.last_broker_rate,
+            access_rate_measured_ij=self.last_access_rate,
+            access_util_measured_ij=self.last_access_rate / self.topology.mu_links,
             **self._queue_and_latency_metrics(),
         ))
         self.window_latencies = []

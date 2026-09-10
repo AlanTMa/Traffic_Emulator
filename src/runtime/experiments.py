@@ -108,6 +108,11 @@ def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=2
         "total_route_variation": float(np.sum(route_rel)),
     }
 
+def _growth(series: np.ndarray) -> float:
+    q = max(len(series) // 4, 1)
+    first, last = float(np.mean(series[:q])), float(np.mean(series[-q:]))
+    return last / first if first > 0 else np.nan
+
 def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, duration: float, warmup_time: float,
                      seed: int, window: float = 5.0, eta: float = None, gamma: float = 0.5, beta: float = 0.3,
                      warmup_windows: int = 4, delta_s: float = 1e-8, eps: float = 1e-12):
@@ -171,11 +176,17 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "latency_mean_i": [float(lat[src == i].mean()) if np.any(src == i) else np.nan for i in range(topo.n_sources)],
         "model_mean_sojourn": model_mean,               # F / sum(lambda) of the final planned routing
         "latency_vs_model": float(lat.mean() / model_mean - 1.0),
-        "util_measured_j": np.mean([r["util_measured_j"] for r in rows], axis=0),
+        "util_measured_j": np.mean([r["util_measured_j"] for r in rows], axis=0),          # EWMA, as notebook
+        # Raw arrival rates averaged over the post-warm-up windows: actual utilizations
+        "util_actual_j": np.mean([r["broker_rate_measured_j"] for r in rows], axis=0) / topo.mu_brokers,
+        "access_util_actual_ij": np.mean([r["access_util_measured_ij"] for r in rows], axis=0),
         "queue_broker_mean_j": q_broker.mean(axis=0),
         "queue_broker_max": int(q_broker.max()),
         "queue_access_mean_ij": q_access.mean(axis=0),
         "queue_access_max": int(q_access.max()),
+        # Total queue occupancy in the last quarter of the measured period vs
+        # the first quarter (>> 1 suggests growth rather than a stationary queue)
+        "queue_growth": _growth(q_broker.sum(axis=1) + q_access.sum(axis=(1, 2))),
         # Planned (controller state)
         "fraction_ij": np.array(last["fraction_ij"]),
         "util_planned_j": np.array(last["util_j"]),
