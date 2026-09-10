@@ -1,8 +1,9 @@
 """
 Queue state management for the event-driven simulation.
 """
+from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Deque, Dict
 import numpy as np
 
 @dataclass
@@ -11,7 +12,9 @@ class Queue:
     Represents an M/M/1 queue.
     """
     capacity: float  # mu
-    queue: List[int] = field(default_factory=list) # Request IDs in queue
+    # Waiting work-unit ids, FIFO. deque: O(1) popleft even when a queue grows
+    # long under high utilization (list.pop(0) is O(n)).
+    queue: Deque[int] = field(default_factory=deque)
     is_busy: bool = False # True if the server is currently processing a request
 
 
@@ -22,7 +25,7 @@ class Queue:
         self.queue.append(request_id)
 
     def pop(self) -> int:
-        return self.queue.pop(0)
+        return self.queue.popleft()
 
 @dataclass
 class SimulationState:
