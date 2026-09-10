@@ -261,25 +261,26 @@ class ControllerService:
                 self.t0 = time.time() + 0.2
                 for channel in self.channels["source"]:
                     await channel.send({"type": "start", "t0": self.t0})
-                log(f"all {self.n + self.m} processes up; traffic started (Ctrl+C to stop)")
+                log(f"all {self.m} brokers and {self.n} sources up; traffic started (Ctrl+C to stop)")
                 await self._rounds()
         finally:
             await self._shutdown(server)
 
     async def _rounds(self):
-        k, last, next_at = 0, self.t0, self.t0 + self.p["window"]
+        k, last, next_at = 0, self.t0, self.t0 + self.p["window"]   # k: Algorithm 1 iterations applied
         while not self.stop.is_set():
             try:
                 await asyncio.wait_for(self.stop.wait(), timeout=max(0.0, next_at - time.time()))
                 break
             except asyncio.TimeoutError:
                 pass
-            k += 1
-            last = await self._round(k, last)
-            if k % 10 == 0 or k == 1:
-                rec = self.telemetry.history[-1] if self.telemetry.history else {}
-                log(f"round {k}: objective {rec.get('objective', float('nan')):.6f}, "
-                    f"completed {rec.get('completed_total', 0)}, {rec.get('certificate_status', '')}")
+            applied_at = await self._round(k + 1, last)
+            if applied_at != last:                     # a skipped round applies no step
+                k, last = k + 1, applied_at
+                if k % 10 == 0 or k == 1:
+                    rec = self.telemetry.history[-1] if self.telemetry.history else {}
+                    log(f"round {k}: objective {rec.get('objective', float('nan')):.6f}, "
+                        f"completed {rec.get('completed_total', 0)}, {rec.get('certificate_status', '')}")
             next_at += self.p["window"]
             if self.duration is not None and time.time() - self.t0 >= self.duration:
                 break
