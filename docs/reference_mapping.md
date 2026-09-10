@@ -16,8 +16,8 @@
 | Access marginal cost C_ij = μ_ij/(μ_ij − λ_ij)² (eq. 12) | inline in `verification_residuals` | `diagnostics.py::marginal_costs` (`C_ij`) | |
 | Broker marginal cost / price C_j = μ_j/(μ_j − Λ_j)² (eq. 13) | `marginal_prices_mm1` (cell 4) | `model/marginal_costs.py::mm1_marginal_cost_vectorized`; `diagnostics.py` (`C_j`) | |
 | KKT conditions (eq. 14) | `solve_central_reference` KKT polish | `central.py::solve_central` (`kkt_equations`) | |
-| Source problem (eq. 15) | `best_response_mm1_optimizer` (validation only) | not ported; validation is the closed form vs `best_response` tests | |
-| Threshold best response (eq. 16) | `best_response_mm1` (cell 4) | `controller/best_response.py::best_response_mm1` | Same algorithm: bisection on conservation, no rescaling |
+| Source problem (eq. 15) | `best_response_mm1_optimizer` (validation only) | `tests/regression/test_notebook_batteries.py::optimizer_best_response` | Validation only, as in the notebook |
+| Threshold best response (eq. 16) | `best_response_mm1` (cell 4) | `controller/best_response.py::best_response_mm1`; `best_response_available` for sparse rows | Same algorithm and the same input validation as the notebook |
 | 5x3 instance (Sec. V-A) | cells 0–2 (seed 42, topics → MB/s) | `config/paper_5x3.yaml`, `config/convergence_5x3.yaml`, `tests/regression/data/baseline_5x3.json` | Exact unrounded values |
 | Units: msg/s × size → MB/s | `producer_emission_MBps` (cell 2); `PACKET_MB = 1.0` (cell 14) | `model/topology.py` module docstring | Event = one normalized work unit (1 MB for 5x3) |
 
@@ -26,7 +26,7 @@
 | Paper | Notebook `distributed_flow_weighted` (cell 4) | Traffic_Emulator | Notes |
 |---|---|---|---|
 | Inputs η_t, γ_t, margin δ_s | `eta`, `gamma`, `eps` (one `eps = 1e-8` serves as margin and numerical guard) | `iteration_step(..., eta, gamma, eps, delta_s)` | `delta_s` (margin, 1e-8) is separate from `eps` (division guard, 1e-12) |
-| Initialization: feasible λ⁽⁰⁾ with Λ_j ≤ μ_j − δ_s | `transportation_feasibility(margin=eps)`: LP maximizing minimum headroom | `controller/feasibility.py::transportation_feasibility(margin=delta_s)`; `synchronous.py::algorithm1_initial_state` | Notebook's sparse `route_mask` not ported. The code also checks the returned routing's actual headroom: HiGHS's ~1e-7 tolerance otherwise lets exactly critical instances through with zero headroom |
+| Initialization: feasible λ⁽⁰⁾ with Λ_j ≤ μ_j − δ_s | `transportation_feasibility(margin=eps, route_mask)`: LP maximizing minimum headroom | `controller/feasibility.py::transportation_feasibility(margin=delta_s, route_mask)`; `synchronous.py::algorithm1_initial_state` | `route_mask` ported (default: all links that exist). Sparse topologies are also supported beyond the LP, which the notebook does not do. The code also checks the returned routing's actual headroom: HiGHS's ~1e-7 tolerance otherwise lets exactly critical instances through with zero headroom |
 | Initial prices p⁽⁰⁾ | `marginal_prices_mm1(L0)` | `run_algorithm1`: `mm1_marginal_cost_vectorized(Λ⁽⁰⁾)` | |
 | Step 1: p ← (1−γ)p + γ C_j(Λ_j) | `p_new = (1-gamma)*p + gamma*p_model` | `synchronous.py::update_prices` | |
 | Step 2: best responses under p⁽ᵗ⁺¹⁾ | `best_response_mm1` per source | `iteration_step` | |
@@ -58,5 +58,5 @@
 | — (no counterpart) | `controller_mode: capacity_safe_event_driven` (`simulation/handler.py::_algorithm1_update`) | Not in the paper or notebook: the notebook's event-style experiment uses the windowed scheme. This mode drives the event queues with exact Algorithm 1 steps (`iteration_step`) on planned rates, so the paper's per-iteration capacity guarantee applies to the planned routing |
 | Load sweep over service-load targets 0.2 / 0.55 / 0.85 by scaling μ (cells 5–6, `run_load_sweep`) | `scripts/sweep_5x3.py`, `scripts/compare_modes.py` | Different design: scales demand, λ_i(r) = r·λ_i, up to the feasibility limit r_max ≈ 4.87; reports measured rather than target utilization; compares all modes |
 | — | `model/symmetric.py`, `docs/symmetric_case.md` | Closed-form symmetric N × M optimum used as an oracle (not in the paper) |
-| Multistart and randomized best-response regressions (cells 7–8) | `tests/unit/test_math.py` (best response), `tests/unit/test_safe_step.py` | Partial port |
-| Time-varying capacities (`vary_*`, cell 1; frozen in the static experiments) | not implemented | Roadmap |
+| Verification batteries (cells 6–8): randomized and stressed best-response regressions, finite-difference derivatives, sparse LP regression, capacity-scaled load sweep (0.2 / 0.55 / 0.85), multistart from `random_feasible_initialization` | `tests/regression/test_notebook_batteries.py`, `tests/unit/test_sparse.py`; `feasibility.py::random_feasible_routing` | Ported with the notebook's tolerances. Our residual definitions differ as noted above. The load sweep and multistart are marked `slow` |
+| Time-varying capacities (`vary_link_capacity`, `vary_broker_capacity`, the 11 `combos`, phase offsets; cell 1) | `model/dynamics.py`, config `dynamics.capacity_variation` | Same formulas, floors and combos. The notebook freezes them (`FREEZE_CAPS = True`) in all its experiments; here they are optional and applied per window in every mode |

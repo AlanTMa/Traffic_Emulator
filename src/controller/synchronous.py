@@ -21,33 +21,44 @@ def update_prices(current_prices: np.ndarray, loads: np.ndarray, mu_brokers: np.
     p_hat = mm1_marginal_cost_vectorized(loads, mu_brokers, eps)
     return (1.0 - gamma) * current_prices + gamma * p_hat
 
+SAFE_STEP_VARIANTS = ("paper", "notebook")
+
 def safe_step_bounds(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
-                     eta: float, delta_s: float = 1e-8) -> np.ndarray:
+                     eta: float, delta_s: float = 1e-8, variant: str = "paper") -> np.ndarray:
     """
     Per-broker step bounds s_j of Algorithm 1 (Step 3), with capacity margin delta_s.
 
-    With Delta_j = sum_i (lambda_br_ij - lambda_ij):
-        s_j = min(1, (mu_j - delta_s - Lambda_j) / (eta * Delta_j))   if Delta_j > 0
-        s_j = 1                                                        otherwise
+    With Delta_j = sum_i (lambda_br_ij - lambda_ij), for Delta_j > 0:
+        variant "paper" (default):  s_j = min(1, (mu_j - delta_s - Lambda_j) / (eta * Delta_j))
+        variant "notebook":         s_j = min(1, (mu_j - delta_s - Lambda_j) / Delta_j)
+    and s_j = 1 otherwise. Both then move by eta * s_t, so both keep
+    Lambda_j <= mu_j - delta_s; they differ only when a bound binds, where
+    the notebook's form takes a step smaller by up to a factor eta. The
+    notebook variant reproduces the reference notebook's
+    distributed_flow_weighted() exactly (see docs/reference_mapping.md).
     """
+    if variant not in SAFE_STEP_VARIANTS:
+        raise ValueError(f"variant must be one of {SAFE_STEP_VARIANTS}")
     load_direction = (lambda_br - lambda_ij).sum(axis=0)
     s_j = np.ones(len(mu_brokers))
     growing = load_direction > 0
+    scale = eta if variant == "paper" else 1.0
     s_j[growing] = np.minimum(1.0, (mu_brokers[growing] - delta_s - loads[growing])
-                              / (eta * load_direction[growing]))
+                              / (scale * load_direction[growing]))
     return s_j
 
 def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
-                      eta: float, delta_s: float = 1e-8) -> float:
+                      eta: float, delta_s: float = 1e-8, variant: str = "paper") -> float:
     """
     Common safe step s_t = min_j s_j of Algorithm 1 (see safe_step_bounds).
     The routing update moves by eta * s_t, so Lambda_j + eta * s_t * Delta_j
     <= mu_j - delta_s for every j.
     """
-    return max(0.0, float(np.min(safe_step_bounds(lambda_ij, lambda_br, loads, mu_brokers, eta, delta_s))))
+    return max(0.0, float(np.min(safe_step_bounds(lambda_ij, lambda_br, loads, mu_brokers, eta, delta_s, variant))))
 
 def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12,
-                   delta_s: float = 1e-8, on_best_response_failure: str = "raise"):
+                   delta_s: float = 1e-8, on_best_response_failure: str = "raise",
+                   safe_step_variant: str = "paper"):
     """
     Perform one iteration of Algorithm 1. Shared by static_algorithm1 and
     capacity_safe_event_driven, so both modes run the same controller step.
@@ -92,7 +103,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
             br_failures.append(i)
 
     # 4. Calculate safe step
-    s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s)
+    s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s, safe_step_variant)
     s_t = max(0.0, float(np.min(s_j)))
 
     # 5. Update routing
@@ -128,7 +139,7 @@ def algorithm1_initial_state(topology, delta_s: float = 1e-8, eps: float = 1e-12
 
 def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float = 1e-10, max_iter: int = 4000,
                    eps: float = 1e-12, delta_s: float = 1e-8, initial_lambda: np.ndarray = None,
-                   require_certificate: bool = False) -> SystemState:
+                   require_certificate: bool = False, safe_step_variant: str = "paper") -> SystemState:
     """
     Run Algorithm 1 from an LP-certified initial routing (maximum-headroom
     transportation LP with margin delta_s) and model prices at that routing.
@@ -144,7 +155,8 @@ def run_algorithm1(topology, eta: float = 0.25, gamma: float = 0.5, tol: float =
     """
     state = algorithm1_initial_state(topology, delta_s, eps, initial_lambda)
     for _ in range(max_iter):
-        state, _, residual = iteration_step(state, topology, eta, gamma, eps=eps, delta_s=delta_s)
+        state, _, residual = iteration_step(state, topology, eta, gamma, eps=eps, delta_s=delta_s,
+                                            safe_step_variant=safe_step_variant)
         if residual < tol and (not require_certificate
                                or compute_diagnostics(state.lambda_ij, state.prices, topology, eps=eps)["certified"]):
             break

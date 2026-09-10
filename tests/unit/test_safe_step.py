@@ -105,3 +105,12 @@ def test_best_response_failure_raises_by_default_and_is_recorded_when_held(monke
     assert state.br_failures == [0]
     assert state.lambda_ij[0] == pytest.approx(lam0[0])      # held source keeps its split
     assert state.lambda_ij.sum(axis=1) == pytest.approx(topo.lambdas_total)
+
+def test_notebook_safe_step_variant():
+    # Same instance as test_binding_single_broker: headroom/Delta = 0.1.
+    # Paper: s = 0.1/0.25 = 0.4 (effective step 0.1). Notebook: s = 0.1 (effective 0.025).
+    lam, br, loads, mu = np.array([[0.0]]), np.array([[1.0]]), np.array([0.0]), np.array([0.1 + 1e-8])
+    assert compute_safe_step(lam, br, loads, mu, eta=0.25, delta_s=1e-8, variant="notebook") == pytest.approx(0.1)
+    assert compute_safe_step(lam, br, loads, mu, eta=0.25, delta_s=1e-8) == pytest.approx(0.4)
+    with pytest.raises(ValueError):
+        compute_safe_step(lam, br, loads, mu, eta=0.25, variant="other")

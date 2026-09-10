@@ -170,6 +170,37 @@ complete config is written to `<output-dir>/generated_config.yaml`; passing
 it back with `--config` reproduces the run exactly (the seed drives both the
 topology and the event RNG).
 
+### Sparse topologies
+
+Links that do not exist are declared explicitly; every other source->broker
+pair still needs a capacity (see `config/sparse_3x3.yaml`):
+
+```yaml
+topology:
+  access_capacities: {"P0->SN1": 7.0, "P0->SN2": 6.0, ...}
+  unavailable_links: ["P0->SN3", "P1->SN1"]
+```
+
+Missing links carry no flow in every mode (best responses, LP start,
+centralized solver, event routing), and the certificate adds
+`r_unavailable_routes`.
+
+### Time-varying capacities
+
+The reference notebook's `vary_link_capacity` / `vary_broker_capacity`
+(sinusoid + Gaussian noise, floors 0.2 / 0.3 of base, seeded phase offsets)
+are available in every mode, piecewise constant per window:
+
+```yaml
+dynamics:
+  capacity_variation:
+    combo: 3          # one of the notebook's 11 cases, or link/broker {amp, period, noise}
+```
+
+Algorithm 1's safe step then protects against the capacities in effect at
+each update; it cannot undo a later capacity drop, and telemetry records
+`mu_links_t` / `mu_brokers_t`.
+
 ### Reproducing the 5x3 results
 
 ```bash
@@ -212,7 +243,15 @@ python -m pytest
 
 GitHub Actions (`.github/workflows/tests.yml`) runs the full suite, including
 the exact 5x3 regression gate, on Python 3.11–3.13 for every push and pull
-request.
+request. `tests/regression/test_notebook_batteries.py` ports the notebook's
+verification batteries with its tolerances (randomized and stressed best
+responses, derivatives, capacity-scaled load sweep, multistart); the load
+sweep and multistart are marked `slow` (several minutes). For a quick local
+run:
+
+```bash
+python -m pytest -m "not slow"
+```
 
 ### Docker
 
@@ -226,9 +265,9 @@ distributed testbed of source and broker containers (see Roadmap).
    `BROKER_PRICE_UPDATE(j)`, `PRICE_SENT(j, i)`, `PRICE_RECEIVED(j, i)` and
    `SOURCE_ROUTING_UPDATE(i)` events, per-source stale price views, no
    global barrier. The paper leaves this to future work.
-2. Dynamic scenarios: scheduled source-rate and access/broker capacity
-   changes (as in the notebook's `vary_*` functions), with adaptation,
-   queue build-up and recovery measured.
+2. Scheduled scenario events (step changes of source rates and capacities
+   at given times) on top of the notebook-style capacity variation, with
+   adaptation, queue build-up and recovery measured.
 3. `docker compose` with emulator and dashboard sharing run output.
 4. Optional multi-process deployment (source, broker, coordinator,
    dashboard services) as a separate mode.
