@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -114,6 +115,9 @@ if RUN_CONFIG.exists() and holder["label"]:
 
 # --- Live charts ---
 
+VIEWS = ["Overview", "Brokers"]
+view = st.segmented_control("View", VIEWS, default="Overview", key="view") or "Overview"
+
 def load_data():
     if not METRICS_FILE.exists():
         return None
@@ -131,6 +135,26 @@ def load_data():
     df["max_util"] = measured.apply(max)
     return df
 
+def node_names(df):
+    """Source and broker ids: from the launched config when it matches, else P0.. / SN1.."""
+    n_sources, n_brokers = np.array(df["lambda_ij"].iloc[-1]).shape
+    try:
+        topo_cfg = yaml.safe_load(RUN_CONFIG.read_text())["topology"]
+        sources = [s["id"] for s in topo_cfg["sources"]]
+        brokers = [b["id"] for b in topo_cfg["brokers"]]
+        if (len(sources), len(brokers)) == (n_sources, n_brokers):
+            return sources, brokers
+    except (OSError, KeyError, TypeError, yaml.YAMLError):
+        pass
+    return [f"P{i}" for i in range(n_sources)], [f"SN{j + 1}" for j in range(n_brokers)]
+
+def per_broker(df, column, brokers):
+    """Long-form frame (iteration, broker, value) from a per-broker list column."""
+    values = np.array(df[column].tolist(), dtype=float)
+    out = pd.DataFrame(values, columns=brokers)
+    out["iteration"] = df["iteration"].to_numpy()
+    return out.melt(id_vars="iteration", var_name="broker", value_name=column)
+
 def render_status(df):
     proc = holder["proc"]
     progress = f" · iteration {int(df['iteration'].iloc[-1])}, t = {df['timestamp'].iloc[-1]:.0f}s" if df is not None and not df.empty else ""
@@ -146,55 +170,78 @@ def render_status(df):
             if any("Traceback" in line or "Error" in line for line in log_tail):
                 st.code("\n".join(log_tail))
 
-# Main layout: the fragment re-runs on its own every REFRESH_RATE seconds,
-# so each chart key is registered exactly once per run.
+def render_overview(df):
+    col1, col2, col3 = st.columns(3)
+    current_obj = df['objective'].iloc[-1]
+    prev_obj = df['objective'].iloc[-2] if len(df) > 1 else current_obj
+    rel_change = df['rel_change'].iloc[-1]
+    col1.metric("Current Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
+    col2.metric("Max Utilization", f"{df['max_util'].iloc[-1]:.2%}")
+    col3.metric("Rel. Change", "—" if pd.isna(rel_change) else f"{rel_change:.2e}")
+
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        st.subheader("Objective Convergence")
+        fig_obj = px.line(df, x='iteration', y='objective',
+                          labels={'iteration': 'Iteration', 'objective': 'Total Delay'},
+                          title="System Objective vs Iteration")
+        st.plotly_chart(fig_obj, width="stretch", key="chart_objective")
+    with chart_col2:
+        st.subheader("Convergence Rate")
+        fig_conv = px.line(df, x='iteration', y='rel_change',
+                           labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
+                           title="Relative Change (Convergence Speed)", log_y=True)
+        st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
+
+def render_brokers(df):
+    _, brokers = node_names(df)
+    measured = "util_measured_j" in df
+    st.subheader("Broker utilization")
+    util = per_broker(df, "util_j", brokers)
+    if measured:
+        # windowed_stochastic: planned (routing / capacity) vs measured (EWMA of arrivals)
+        util["kind"] = "planned"
+        util_m = per_broker(df, "util_measured_j", brokers).rename(columns={"util_measured_j": "util_j"})
+        util_m["kind"] = "measured"
+        util = pd.concat([util, util_m])
+        fig = px.line(util, x="iteration", y="util_j", color="broker", line_dash="kind",
+                      labels={"iteration": "Iteration", "util_j": "Utilization Λ_j / μ_j"})
+    else:
+        fig = px.line(util, x="iteration", y="util_j", color="broker",
+                      labels={"iteration": "Iteration", "util_j": "Utilization Λ_j / μ_j"})
+    fig.update_yaxes(tickformat=".1%")
+    st.plotly_chart(fig, width="stretch", key="chart_broker_util")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Broker loads Λ_j")
+        fig = px.line(per_broker(df, "load_j", brokers), x="iteration", y="load_j", color="broker",
+                      labels={"iteration": "Iteration", "load_j": "Load (work units/s)"})
+        st.plotly_chart(fig, width="stretch", key="chart_broker_load")
+    with col2:
+        st.subheader("Congestion prices p_j")
+        fig = px.line(per_broker(df, "price_j", brokers), x="iteration", y="price_j", color="broker",
+                      labels={"iteration": "Iteration", "price_j": "Price p_j"})
+        st.plotly_chart(fig, width="stretch", key="chart_broker_price")
+
+    last = df.iloc[-1]
+    table = pd.DataFrame({"load Λ_j": last["load_j"], "utilization": last["util_j"], "price p_j": last["price_j"]},
+                         index=brokers)
+    if measured:
+        table["measured utilization"] = last["util_measured_j"]
+    st.dataframe(table.style.format({c: "{:.2%}" if "utilization" in c else "{:.6g}" for c in table.columns}))
+
+RENDERERS = {"Overview": render_overview, "Brokers": render_brokers}
+
+# The fragment re-runs on its own every REFRESH_RATE seconds, so each chart
+# key is registered exactly once per run.
 @st.fragment(run_every=REFRESH_RATE)
 def render_dashboard():
     df = load_data()
     render_status(df)
 
     if df is not None and not df.empty:
-        # Top Row: KPIs
-        col1, col2, col3 = st.columns(3)
-
-        current_obj = df['objective'].iloc[-1]
-        prev_obj = df['objective'].iloc[-2] if len(df) > 1 else current_obj
-        rel_change = df['rel_change'].iloc[-1]
-        max_util = df['max_util'].iloc[-1]
-
-        col1.metric("Current Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
-        col2.metric("Max Utilization", f"{max_util:.2%}")
-        col3.metric("Rel. Change", "—" if pd.isna(rel_change) else f"{rel_change:.2e}")
-
-        # Middle Row: Charts
-        chart_col1, chart_col2 = st.columns(2)
-
-        with chart_col1:
-            st.subheader("Objective Convergence")
-            fig_obj = px.line(df, x='iteration', y='objective',
-                             labels={'iteration': 'Iteration', 'objective': 'Total Delay'},
-                             title="System Objective vs Iteration")
-            st.plotly_chart(fig_obj, width="stretch", key="chart_objective")
-
-        with chart_col2:
-            st.subheader("Convergence Rate")
-            fig_conv = px.line(df, x='iteration', y='rel_change',
-                             labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
-                             title="Relative Change (Convergence Speed)",
-                             log_y=True)
-            st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
-
-        # Bottom Row: Utilization
-        st.subheader("Max Broker Utilization")
-        # Measured (EWMA of arrivals) vs planned (routing / capacity); older
-        # metrics files only have max_util
-        util_cols = {'max_util': 'Measured', 'max_util_planned': 'Planned'}
-        df_util = df.rename(columns=util_cols)
-        fig_util = px.line(df_util, x='iteration', y=[c for k, c in util_cols.items() if k in df],
-                         labels={'iteration': 'Iteration', 'value': 'Utilization', 'variable': ''},
-                         title="Max Utilization over Time")
-        st.plotly_chart(fig_util, width="stretch", key="chart_utilization")
-
+        RENDERERS[view](df)
     elif is_running(holder):
         st.info("Simulation started; the first point appears after the first window.")
     else:
