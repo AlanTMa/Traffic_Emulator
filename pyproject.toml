@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traffic-emulator"
+version = "0.2.0"
+description = "Event-driven and distributed emulator of joint access/broker congestion pricing (WiOpt'26, arXiv:2602.03246)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "pandas", "scipy", "pyyaml", "matplotlib", "streamlit", "plotly"]
+
+[project.scripts]
+# traffic-emulator up ...   (distributed emulator)
+# traffic-emulator run ...  (in-process reference backend)
+traffic-emulator = "src.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

@@ -229,7 +229,45 @@ def main():
     run_parser.add_argument("--output-dir", default="runs/latest",
                             help="Directory for metrics.jsonl (default: runs/latest)")
 
+    up_parser = subparsers.add_parser(
+        "up", help="Start the distributed emulator (controller, sources, brokers, dashboard)",
+        description="One command for the distributed emulator: one controller process, one process per source "
+                    "and per broker, and the dashboard. Algorithm 1 (paper) drives the routing of live traffic "
+                    "over explicit access and broker queues. Runs until Ctrl+C.")
+    up_parser.add_argument("--config", help="config whose topology is used (default config/paper_5x3.yaml "
+                                            "unless --sources/--brokers generate one)")
+    up_parser.add_argument("--sources", type=int, help="number of source processes (must match --config, "
+                                                       "or generates an N x M topology)")
+    up_parser.add_argument("--brokers", type=int, help="number of broker processes")
+    up_parser.add_argument("--load", type=float, default=0.3, help="generated topology: offered/broker capacity")
+    up_parser.add_argument("--seed", type=int, default=42, help="generated topology and root RNG seed")
+    up_parser.add_argument("--backend", choices=["docker", "local"], default="docker",
+                           help="docker: Docker Compose, one container per process (default); "
+                                "local: the same processes on this machine")
+    up_parser.add_argument("--window", type=float, help="seconds between controller rounds (config default 5)")
+    for name in ("eta", "gamma", "delta-s"):
+        up_parser.add_argument(f"--{name}", type=float, help=f"override Algorithm 1 {name}")
+    up_parser.add_argument("--output-dir", default="runs/distributed", help="telemetry and run metadata")
+    up_parser.add_argument("--no-dashboard", action="store_true")
+    up_parser.add_argument("--port", type=int, default=7000, help="local backend: controller port")
+    up_parser.add_argument("--dashboard-port", type=int, default=8501, help="local backend: dashboard port")
+    up_parser.add_argument("--duration", type=float, help="local backend: stop after this many seconds")
+
     args = parser.parse_args()
+
+    if args.command == "up":
+        from src.distributed import launcher
+        config = args.config or (None if args.sources is not None or args.brokers is not None
+                                 else "config/paper_5x3.yaml")
+        try:
+            run = launcher.prepare_run(config, args.sources, args.brokers, args.load, args.seed, args.output_dir,
+                                       args.window, {"eta": args.eta, "gamma": args.gamma, "delta_s": args.delta_s})
+        except ValueError as e:
+            parser.error(str(e))
+        launcher.describe(run)
+        if args.backend == "local":
+            sys.exit(launcher.run_local(run, args.port, not args.no_dashboard, args.dashboard_port, args.duration))
+        sys.exit(launcher.run_docker(run, not args.no_dashboard))
 
     if args.command == "run":
         config_path = args.config
