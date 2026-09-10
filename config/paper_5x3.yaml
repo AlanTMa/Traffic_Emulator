@@ -7,7 +7,7 @@ simulation:
   # add "duration: 300" to reproduce exactly that.
   window: 5       # seconds per window; one price + routing update each
   warmup: 4       # windows before sources start adapting their splits
-  mode: "synchronous"
+  controller_mode: "windowed_stochastic"
 
 algorithm:
   gamma: 0.5      # price smoothing

@@ -3,7 +3,7 @@
 simulation:
   duration: 100   # 100 iterations at window=1s
   window: 1
-  mode: "static"
+  controller_mode: "static_algorithm1"
 
 algorithm:
   gamma: 0.5

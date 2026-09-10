@@ -7,7 +7,7 @@ import numpy as np
 import signal
 import sys
 import time
-from src.model.config import load_config, topology_from_config
+from src.model.config import controller_mode, load_config, topology_from_config
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
@@ -44,13 +44,14 @@ def run_simulation(config_path: str, real_time: bool = True):
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
     telemetry = TelemetryBuffer()
 
-    print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers")
+    mode = controller_mode(config)
+    print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}")
     if np.isinf(duration):
         print(f"Running until stopped, controller every {window}s. Press Ctrl+C to stop.", flush=True)
     else:
         print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.", flush=True)
 
-    if sim_cfg.get('mode') == 'static':
+    if mode == 'static_algorithm1':
         run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time)
         return
 
@@ -97,8 +98,8 @@ def run_simulation(config_path: str, real_time: bool = True):
 
 def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
     """
-    Run the deterministic synchronous solver (no packets), one iteration per
-    window. Reproduces the notebook's static distributed convergence plots.
+    static_algorithm1: paper Algorithm 1 on the analytic model (no packets),
+    one iteration per window. Reproduces the notebook's static convergence plots.
     """
     eta = float(alg_cfg.get('eta', 0.25))
     gamma = float(alg_cfg.get('gamma', 0.5))

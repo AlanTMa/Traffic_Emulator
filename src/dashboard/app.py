@@ -88,7 +88,7 @@ with st.sidebar:
         try:
             if topology_source == "Generate":
                 config = {
-                    "simulation": {"window": window, "warmup": int(warmup), "mode": "synchronous"},
+                    "simulation": {"window": window, "warmup": int(warmup), "controller_mode": "windowed_stochastic"},
                     "algorithm": {"eta": eta, "gamma": gamma, "beta": beta},
                     "topology": generate_topology_config(n_sources, n_brokers, load, int(seed)),
                 }

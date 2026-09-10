@@ -2,7 +2,7 @@
 simulation:
   duration: 1e12
   warmup: 10.0
-  mode: "asynchronous"
+  controller_mode: "windowed_stochastic"
 
 algorithm:
   gamma: 0.5

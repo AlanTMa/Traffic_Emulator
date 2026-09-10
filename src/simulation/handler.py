@@ -11,13 +11,18 @@ class SimulationHandler:
     """
     Processes simulation events and updates the system state.
 
-    The routing controller follows the notebook's windowed stochastic scheme
-    (WiOpt26JNSC_Extended.ipynb, "Windowed Stochastic simulation of the
-    DISTRIBUTED pricing scheme"). At the end of every window:
+    Controller mode 'windowed_stochastic': the reference notebook's windowed
+    stochastic scheme (WiOpt26JNSC_Extended.ipynb, "Windowed Stochastic
+    simulation of the DISTRIBUTED pricing scheme"). At the end of every window:
       1. each broker updates an EWMA estimate of its *measured* arrival rate
          and damps its price toward mu_j / (mu_j - Lambda_hat_j)^2;
       2. after the warm-up windows, every source moves its split toward its
          best response to the new prices (synchronously, with inertia eta).
+
+    This is NOT paper Algorithm 1: there is no common safe step, so planned
+    broker loads carry no per-iteration capacity guarantee, and prices track
+    noisy measurements rather than C_j(Lambda_j). All sources update at one
+    global window barrier; it is not an asynchronous controller.
     """
     def __init__(self, engine, topology, state: SimulationState, x_ij: np.ndarray, telemetry: TelemetryBuffer = None,
                  eta: float = 0.35, gamma: float = 0.5, beta: float = 0.3,
