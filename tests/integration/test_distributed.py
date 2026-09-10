@@ -168,8 +168,12 @@ def test_live_5x3_matches_reference_and_keeps_traffic_flowing(tmp_path):
     assert last["completed_total"] > 200                     # ~60 work units/s were generated and served
     assert last["latency_p50"] <= last["latency_p95"] <= last["latency_p99"]
     assert set(last["latency_parts"]) == {"access_wait", "access_service", "transfer", "broker_wait", "broker_service"}
-    # Queueing part of the sojourn is consistent with the planned M/M/1 model
-    assert last["queueing_sojourn_mean"] == pytest.approx(last["objective"] / topo.lambdas_total.sum(), rel=0.35)
+    # Queueing part of the sojourn is consistent with the planned M/M/1 model: mean over every
+    # completed unit (one 0.5 s window holds only ~30 units, too few to test on its own)
+    n_done = np.array([r["completed_window"] if np.isfinite(r["queueing_sojourn_mean"]) else 0 for r in rows], float)
+    measured = np.sum(n_done * np.nan_to_num([r["queueing_sojourn_mean"] for r in rows])) / n_done.sum()
+    model = np.sum(n_done * np.array([r["objective"] for r in rows])) / n_done.sum() / topo.lambdas_total.sum()
+    assert measured == pytest.approx(model, rel=0.25)
     assert meta["execution_backend"] == "distributed"
     assert sorted(meta["processes"]["source"].values()) == ["P0", "P1", "P2", "P3", "P4"]
     assert sorted(meta["processes"]["broker"].values()) == ["SN1", "SN2", "SN3"]
