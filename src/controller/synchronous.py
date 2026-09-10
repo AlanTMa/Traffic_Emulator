@@ -20,25 +20,30 @@ def update_prices(current_prices: np.ndarray, loads: np.ndarray, mu_brokers: np.
     p_hat = mm1_marginal_cost_vectorized(loads, mu_brokers, eps)
     return (1.0 - gamma) * current_prices + gamma * p_hat
 
+def safe_step_bounds(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
+                     eta: float, delta_s: float = 1e-8) -> np.ndarray:
+    """
+    Per-broker step bounds s_j of Algorithm 1 (Step 3), with capacity margin delta_s.
+
+    With Delta_j = sum_i (lambda_br_ij - lambda_ij):
+        s_j = min(1, (mu_j - delta_s - Lambda_j) / (eta * Delta_j))   if Delta_j > 0
+        s_j = 1                                                        otherwise
+    """
+    load_direction = (lambda_br - lambda_ij).sum(axis=0)
+    s_j = np.ones(len(mu_brokers))
+    growing = load_direction > 0
+    s_j[growing] = np.minimum(1.0, (mu_brokers[growing] - delta_s - loads[growing])
+                              / (eta * load_direction[growing]))
+    return s_j
+
 def compute_safe_step(lambda_ij: np.ndarray, lambda_br: np.ndarray, loads: np.ndarray, mu_brokers: np.ndarray,
                       eta: float, delta_s: float = 1e-8) -> float:
     """
-    Common safe step s_t of Algorithm 1, with capacity margin delta_s.
-
-    With Delta_j = sum_i (lambda_br_ij - lambda_ij), for every broker with Delta_j > 0:
-        s_j = min(1, (mu_j - delta_s - Lambda_j) / (eta * Delta_j))
-    and s_j = 1 otherwise; s_t = min_j s_j. The routing update then moves by
-    eta * s_t, so Lambda_j + eta * s_t * Delta_j <= mu_j - delta_s for every j.
+    Common safe step s_t = min_j s_j of Algorithm 1 (see safe_step_bounds).
+    The routing update moves by eta * s_t, so Lambda_j + eta * s_t * Delta_j
+    <= mu_j - delta_s for every j.
     """
-    load_direction = (lambda_br - lambda_ij).sum(axis=0)
-
-    s_t = 1.0
-    for j in range(len(mu_brokers)):
-        if load_direction[j] > 0:
-            s_j = (mu_brokers[j] - delta_s - loads[j]) / (eta * load_direction[j])
-            s_t = min(s_t, s_j)
-
-    return max(0.0, s_t)
+    return max(0.0, float(np.min(safe_step_bounds(lambda_ij, lambda_br, loads, mu_brokers, eta, delta_s))))
 
 def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: float = 1e-12,
                    delta_s: float = 1e-8):
@@ -68,7 +73,8 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
         )
 
     # 4. Calculate safe step
-    s_t = compute_safe_step(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s)
+    s_j = safe_step_bounds(state.lambda_ij, lambda_br, loads, topology.mu_brokers, eta, delta_s)
+    s_t = max(0.0, float(np.min(s_j)))
 
     # 5. Update routing
     step = eta * s_t
@@ -82,7 +88,7 @@ def iteration_step(state: SystemState, topology, eta: float, gamma: float, eps: 
     state.lambda_ij = new_lambda_ij
     state.prices = new_prices
     state.iteration += 1
-    state.s_t, state.route_rel, state.price_rel = s_t, route_rel, price_rel
+    state.s_j, state.s_t, state.route_rel, state.price_rel = s_j, s_t, route_rel, price_rel
 
     return state, s_t, max(route_rel, price_rel)
 

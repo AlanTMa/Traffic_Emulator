@@ -17,11 +17,12 @@ from src.model.generate import generate_topology_config
 st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
 
 st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
-st.markdown("Set up a topology in the sidebar and launch a simulation; charts update live from `simulation_metrics.csv`.")
+st.markdown("Set up a topology in the sidebar and launch a simulation; charts update live from `runs/latest/metrics.jsonl`.")
 
 # Configuration
-METRICS_FILE = PROJECT_ROOT / "simulation_metrics.csv"  # written by the simulation (cwd = project root)
 RUN_DIR = PROJECT_ROOT / "runs"
+OUTPUT_DIR = RUN_DIR / "latest"
+METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema: src/telemetry/schema.py)
 RUN_CONFIG = RUN_DIR / "dashboard_run.yaml"
 RUN_LOG = RUN_DIR / "dashboard_run.log"
 REFRESH_RATE = 2 # seconds
@@ -53,7 +54,7 @@ def launch_simulation(holder: dict, config: dict, label: str):
     METRICS_FILE.unlink(missing_ok=True)  # start the charts from scratch
     holder["log"] = open(RUN_LOG, "w")
     holder["proc"] = subprocess.Popen(
-        [sys.executable, "-u", "-m", "src.cli", "run", "--config", str(RUN_CONFIG)],
+        [sys.executable, "-u", "-m", "src.cli", "run", "--config", str(RUN_CONFIG), "--output-dir", str(OUTPUT_DIR)],
         cwd=PROJECT_ROOT, stdout=holder["log"], stderr=subprocess.STDOUT,
     )
     holder["label"] = label
@@ -117,10 +118,18 @@ def load_data():
     if not METRICS_FILE.exists():
         return None
     try:
-        return pd.read_csv(METRICS_FILE)
-    except Exception as e:
-        st.error(f"Error reading metrics file: {e}")
-        return None
+        df = pd.read_json(METRICS_FILE, lines=True)
+    except ValueError:
+        return None  # empty file, or a line still being written
+    if df.empty:
+        return df
+    # Scalar views of the per-broker records for the summary charts
+    df["timestamp"] = df["sim_time"]
+    df["rel_change"] = df[["route_rel", "price_rel"]].max(axis=1)
+    df["max_util_planned"] = df["util_j"].apply(max)
+    measured = df["util_measured_j"] if "util_measured_j" in df else df["util_j"]
+    df["max_util"] = measured.apply(max)
+    return df
 
 def render_status(df):
     proc = holder["proc"]

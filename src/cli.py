@@ -7,6 +7,7 @@ import numpy as np
 import signal
 import sys
 import time
+from pathlib import Path
 from src.model.config import controller_mode, load_config, topology_from_config
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
@@ -14,6 +15,7 @@ from src.simulation.queues import SimulationState
 from src.simulation.handler import SimulationHandler
 from src.controller.feasibility import transportation_feasibility
 from src.telemetry.metrics import TelemetryBuffer
+from src.telemetry.schema import controller_snapshot
 from src.controller.synchronous import iteration_step
 from src.simulation.state import SystemState
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
@@ -26,7 +28,7 @@ def signal_handler(sig, frame):
     print("\n[SIGINT] Shutdown signal received. Stopping simulation...")
     RUNNING = False
 
-def run_simulation(config_path: str, real_time: bool = True):
+def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "runs/latest"):
     global RUNNING
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -42,7 +44,9 @@ def run_simulation(config_path: str, real_time: bool = True):
 
     # 2. Initialization
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
-    telemetry = TelemetryBuffer()
+    output_dir = Path(output_dir)
+    telemetry = TelemetryBuffer(path=output_dir / "metrics.jsonl")
+    print(f"Writing telemetry to {output_dir / 'metrics.jsonl'}")
 
     mode = controller_mode(config)
     print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}")
@@ -121,17 +125,15 @@ def run_static(topo, x_ij, alg_cfg, window, duration, telemetry, real_time):
             time.sleep(max(0.0, wall_start + k * window - time.perf_counter()))
 
         state, _, residual = iteration_step(state, topo, eta, gamma, eps=eps, delta_s=delta_s)
-        L = state.lambda_ij
-        L_j = L.sum(axis=0)
-        obj = np.sum(L / (topo.mu_links - L)) + np.sum(L_j / (topo.mu_brokers - L_j))
-        util = np.max(L_j / topo.mu_brokers)
-        telemetry.record(timestamp=k * window, iteration=k, state_data={
-            "objective": obj, "max_util": util, "max_util_planned": util, "rel_change": residual,
-        })
-        telemetry.save_to_csv("simulation_metrics.csv")
+        record = controller_snapshot(
+            topo, state.lambda_ij, state.prices, iteration=k, sim_time=k * window,
+            controller_mode="static_algorithm1", s_j=state.s_j, s_t=state.s_t,
+            route_rel=state.route_rel, price_rel=state.price_rel, eps=eps)
+        telemetry.record(record)
 
     print("\n=== Static Solve Complete ===")
-    print(f"Iterations: {state.iteration}, objective: {obj:.6f}, final residual: {residual:.2e}")
+    print(f"Iterations: {state.iteration}, objective: {record['objective']:.10f}, final residual: {residual:.2e}")
+    print(record["certificate_status"])
 
 def main():
     parser = argparse.ArgumentParser(description="Traffic Allocation Emulator")
@@ -141,11 +143,13 @@ def main():
     run_parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
     run_parser.add_argument("--no-realtime", action="store_true",
                             help="Run as fast as possible instead of pacing to the wall clock")
+    run_parser.add_argument("--output-dir", default="runs/latest",
+                            help="Directory for metrics.jsonl (default: runs/latest)")
 
     args = parser.parse_args()
 
     if args.command == "run":
-        run_simulation(args.config, real_time=not args.no_realtime)
+        run_simulation(args.config, real_time=not args.no_realtime, output_dir=args.output_dir)
     else:
         parser.print_help()
 

@@ -6,6 +6,7 @@ from src.simulation.events import Event, EventType
 from src.simulation.queues import SimulationState
 from src.controller.best_response import best_response_mm1
 from src.telemetry.metrics import TelemetryBuffer
+from src.telemetry.schema import controller_snapshot
 
 class SimulationHandler:
     """
@@ -240,36 +241,21 @@ class SimulationHandler:
         ))
 
     def _record_telemetry(self):
-        mu_j = self.topology.mu_brokers
-        planned_j = self.x_ij.sum(axis=0)
-
-        # Analytic M/M/1 objective of the current routing:
-        # sum(x_ij / (mu_ij - x_ij)) + sum(lambda_j / (mu_j - lambda_j))
-        diff_links = np.maximum(self.topology.mu_links - self.x_ij, 1e-6)
-        diff_brokers = np.maximum(mu_j - planned_j, 1e-6)
-        obj = np.sum(self.x_ij / diff_links) + np.sum(planned_j / diff_brokers)
-
-        # Controller residual since the last window: max of relative routing
-        # and price change (same measure as synchronous.iteration_step)
-        rel_change = np.nan
+        # Relative routing and price change since the last window (same
+        # measures as synchronous.iteration_step)
+        route_rel = price_rel = np.nan
         if self.prev_x_ij is not None:
             route_rel = np.linalg.norm(self.x_ij - self.prev_x_ij) / max(np.linalg.norm(self.prev_x_ij), self.eps)
             price_rel = np.linalg.norm(self.prices - self.prev_prices) / max(np.linalg.norm(self.prev_prices), self.eps)
-            rel_change = max(route_rel, price_rel)
         self.prev_x_ij = self.x_ij.copy()
         self.prev_prices = self.prices.copy()
 
-        self.telemetry.record(
-            timestamp=self.engine.now,
-            iteration=self.window_idx,
-            state_data={
-                "objective": obj,
-                # Measured (EWMA) utilization, as plotted in the notebook
-                "max_util": np.max(self.lambda_hat / mu_j),
-                "max_util_planned": np.max(planned_j / mu_j),
-                "rel_change": rel_change,
-            }
-        )
-
-        # LIVE UPDATE: Save to CSV every tick so the dashboard can read it
-        self.telemetry.save_to_csv("simulation_metrics.csv")
+        # Model quantities on the planned split; no safe step in this mode
+        self.telemetry.record(controller_snapshot(
+            self.topology, self.x_ij, self.prices,
+            iteration=self.window_idx, sim_time=self.engine.now, controller_mode="windowed_stochastic",
+            route_rel=route_rel, price_rel=price_rel,
+            # Measured: EWMA of broker arrival rates, as plotted in the notebook
+            lambda_hat_j=self.lambda_hat.copy(),
+            util_measured_j=self.lambda_hat / self.topology.mu_brokers,
+        ))
