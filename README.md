@@ -55,9 +55,14 @@ Set `simulation.controller_mode` in a config:
 | Mode | What runs | Guarantees |
 |---|---|---|
 | `static_algorithm1` | Paper Algorithm 1 on the analytic model; no events or queues. One iteration per `window` seconds. | Every iterate keeps Λ_j ≤ μ_j − δ_s (safe step). The 5x3 run matches the reference notebook (70 iterations, F = 2.0157473649138, λ within 1e-9). |
-| `windowed_stochastic` | Event-driven queues (Poisson arrivals, exponential service, separate access and broker queues) driven by the notebook's **windowed stochastic** scheme: per window, brokers take an EWMA (β) of *measured* arrival rates, damp prices (γ), and after `warmup` windows every source moves its split toward its best response with inertia η. | None per iteration: there is **no safe step**, so planned broker loads are not kept below capacity by construction, and prices track noisy measurements, so the Proposition 1 certificate is not expected to pass exactly. All sources update at one global window barrier. |
+| `capacity_safe_event_driven` | The same event-driven queues, but at every window boundary the **planned** routing is advanced by exactly one Algorithm 1 step (`synchronous.iteration_step`, the function `static_algorithm1` uses) on planned rates; arrivals are then routed with probabilities λ_ij / λ_i. Measured rates, queues and sojourn times are recorded but never enter the controller. No warm-up; β only smooths measured-rate telemetry. | Planned Λ_j ≤ μ_j − δ_s and source conservation at every update (safe step). Its planned iterates equal `static_algorithm1`'s bit for bit, independent of the traffic seed. Nothing is guaranteed about *measured* queues, which are stochastic. |
+| `windowed_stochastic` | Event-driven queues (Poisson arrivals, exponential service, separate access and broker queues) driven by the notebook's **windowed stochastic** scheme: per window, brokers take an EWMA (β) of *measured* arrival rates, damp prices (γ), and after `warmup` windows every source moves its split toward its best response with inertia η. | None per iteration: there is **no safe step**, so planned broker loads are not kept below capacity by construction, and prices track noisy measurements, so the Proposition 1 certificate is not expected to pass exactly. |
 
-Neither mode is asynchronous (see [Roadmap](#roadmap)).
+`static_algorithm1` vs `capacity_safe_event_driven` isolates the effect of
+stochastic arrivals (same controller); `capacity_safe_event_driven` vs
+`windowed_stochastic` isolates the effect of a controller driven by noisy
+windowed measurements (same queues). All three update every source at one
+global barrier; none is asynchronous (see [Roadmap](#roadmap)).
 
 ### What is and is not guaranteed
 
@@ -70,6 +75,16 @@ Neither mode is asynchronous (see [Roadmap](#roadmap)).
   does not claim it on the open M/M/1 domain). The dashboard reports
   *"Current state satisfies feasible fixed-point optimality conditions"*
   only when every certificate residual is within tolerance for that state.
+  On the symmetric 5x3 instance (broker utilization 0.75) the paper's
+  step sizes η = 0.25, γ = 0.5 produce a feasible period-2 cycle that never
+  certifies; η = 0.01, γ = 0.02 converged on every tested symmetric case
+  ([docs/symmetric_case.md](docs/symmetric_case.md)). Capacity safety held in
+  all of these runs; convergence depends on damping.
+- **Input validation:** topologies reject NaN/inf, negative rates,
+  non-positive capacities, malformed shapes, duplicate ids, and configs with
+  missing, unknown, duplicate or malformed access links (no capacity is
+  silently zero). The transportation LP rejects routings short of the
+  requested headroom (HiGHS's tolerance exceeds the 1e-8 margin).
 - **Tolerances** are the notebook's absolute values (e.g. KKT
   complementarity 1e-8). They are scale-dependent: at 95% of the maximum 5x3
   load the notebook stopping rule ends before KKT complementarity meets 1e-8;
@@ -83,9 +98,9 @@ Neither mode is asynchronous (see [Roadmap](#roadmap)).
 
 ```
 src/
-  cli.py                 run a config: static_algorithm1 or windowed_stochastic
-  model/                 topology + units, configs (controller_mode), delays,
-                         marginal costs, random topology generator
+  cli.py                 run a config or a generated N x M topology in any mode
+  model/                 topology + units + validation, configs (controller_mode),
+                         delays, marginal costs, topology generator, symmetric oracle
   controller/
     synchronous.py       Algorithm 1: iteration_step, safe_step_bounds, run_algorithm1
     best_response.py     exact threshold best response (eq. 16)
@@ -93,13 +108,16 @@ src/
     central.py           centralized solver (SLSQP + KKT polish) and objective F
     diagnostics.py       Proposition 1 certificate: residuals, alpha_i, spreads
   simulation/            event engine (wall-clock pacing), events, deque queues,
-                         windowed_stochastic handler, SystemState
+                         handler (windowed_stochastic / capacity_safe_event_driven),
+                         SystemState
   telemetry/             schema (one JSON record per iteration/window),
                          append-only JSONL writer, incremental reader
   runtime/metadata.py    seeds, git SHA, run.json
+  runtime/experiments.py shared static/event experiment runners
   dashboard/app.py       Streamlit: launch/stop runs, live research views
-scripts/                 load_sweep.py (1x1 M/M/1), sweep_5x3.py (high load)
-config/                  paper_5x3, convergence_5x3, simple_1x1
+scripts/                 load_sweep.py (1x1 M/M/1), sweep_5x3.py (high load),
+                         compare_modes.py (three modes side by side)
+config/                  paper_5x3, convergence_5x3, capacity_safe_5x3, simple_1x1
 tests/                   unit, integration, regression (5x3 gate + fixture)
 ```
 
@@ -139,6 +157,19 @@ Options: `--no-realtime` (run as fast as possible), `--output-dir runs/NAME`
 (default `runs/latest`). Set `simulation.seed` for reproducible event runs;
 unseeded runs record the seed they drew in `run.json`.
 
+Generated N x M topology instead of a config (capacities drawn from the
+notebook's ranges, source rates scaled to `--load` of total broker capacity):
+
+```bash
+python -m src.cli run --sources 10 --brokers 5 --load 0.5 --seed 42 --controller static_algorithm1
+```
+
+Also `--controller capacity_safe_event_driven|windowed_stochastic`,
+`--window`, `--duration`, `--warmup`, `--eta/--gamma/--beta/--delta-s`. The
+complete config is written to `<output-dir>/generated_config.yaml`; passing
+it back with `--config` reproduces the run exactly (the seed drives both the
+topology and the event RNG).
+
 ### Reproducing the 5x3 results
 
 ```bash
@@ -160,15 +191,28 @@ python -m scripts.sweep_5x3
 Scales the 5x3 instance by λ_i(r) = r·λ_i with r at 20–95% of the largest
 feasible multiplier (r_max ≈ 4.87, set by P2/P3's access links; aggregate
 broker load then is only ~63%, SN2 reaches ~85%). For each r it runs static
-Algorithm 1, an event simulation of that optimum (queueing validation) and
-the windowed controller; results go to `runs/sweep_5x3/`. The 1x1 M/M/1
-check is `python -m scripts.load_sweep`.
+Algorithm 1, an event simulation of that optimum (queueing validation),
+`capacity_safe_event_driven` and `windowed_stochastic`, reporting planned and
+actual utilization per broker and per access path, safe-step activity,
+headroom, queue growth, p95/p99 and the measured-vs-analytical gap; results
+go to `runs/sweep_5x3/`. The 1x1 M/M/1 check is `python -m scripts.load_sweep`.
+
+Side-by-side comparison of the three modes on one topology (same seed for
+both event modes; `--config`, `--multiplier`, `--duration`, `--warmup-time`):
+
+```bash
+python -m scripts.compare_modes
+```
 
 ### Tests
 
 ```bash
 python -m pytest
 ```
+
+GitHub Actions (`.github/workflows/tests.yml`) runs the full suite, including
+the exact 5x3 regression gate, on Python 3.11–3.13 for every push and pull
+request.
 
 ### Docker
 
@@ -182,9 +226,9 @@ distributed testbed of source and broker containers (see Roadmap).
    `BROKER_PRICE_UPDATE(j)`, `PRICE_SENT(j, i)`, `PRICE_RECEIVED(j, i)` and
    `SOURCE_ROUTING_UPDATE(i)` events, per-source stale price views, no
    global barrier. The paper leaves this to future work.
-2. `capacity_safe_event_driven`: event-driven queues with Algorithm 1's
-   safe step.
-3. Dynamic scenarios (time-varying capacities, as in the notebook's
-   `vary_*` functions).
+2. Dynamic scenarios: scheduled source-rate and access/broker capacity
+   changes (as in the notebook's `vary_*` functions), with adaptation,
+   queue build-up and recovery measured.
+3. `docker compose` with emulator and dashboard sharing run output.
 4. Optional multi-process deployment (source, broker, coordinator,
    dashboard services) as a separate mode.

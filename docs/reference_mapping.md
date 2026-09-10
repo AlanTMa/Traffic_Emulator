@@ -26,7 +26,7 @@
 | Paper | Notebook `distributed_flow_weighted` (cell 4) | Traffic_Emulator | Notes |
 |---|---|---|---|
 | Inputs η_t, γ_t, margin δ_s | `eta`, `gamma`, `eps` (one `eps = 1e-8` serves as margin and numerical guard) | `iteration_step(..., eta, gamma, eps, delta_s)` | `delta_s` (margin, 1e-8) is separate from `eps` (division guard, 1e-12) |
-| Initialization: feasible λ⁽⁰⁾ with Λ_j ≤ μ_j − δ_s | `transportation_feasibility(margin=eps)`: LP maximizing minimum headroom | `controller/feasibility.py::transportation_feasibility(margin=delta_s)` | Notebook's sparse `route_mask` not ported |
+| Initialization: feasible λ⁽⁰⁾ with Λ_j ≤ μ_j − δ_s | `transportation_feasibility(margin=eps)`: LP maximizing minimum headroom | `controller/feasibility.py::transportation_feasibility(margin=delta_s)`; `synchronous.py::algorithm1_initial_state` | Notebook's sparse `route_mask` not ported. The code also checks the returned routing's actual headroom: HiGHS's ~1e-7 tolerance otherwise lets exactly critical instances through with zero headroom |
 | Initial prices p⁽⁰⁾ | `marginal_prices_mm1(L0)` | `run_algorithm1`: `mm1_marginal_cost_vectorized(Λ⁽⁰⁾)` | |
 | Step 1: p ← (1−γ)p + γ C_j(Λ_j) | `p_new = (1-gamma)*p + gamma*p_model` | `synchronous.py::update_prices` | |
 | Step 2: best responses under p⁽ᵗ⁺¹⁾ | `best_response_mm1` per source | `iteration_step` | |
@@ -55,6 +55,8 @@
 | Paper / notebook | Traffic_Emulator | Notes |
 |---|---|---|
 | Windowed stochastic simulation (cell 14): Poisson counts per window, EWMA β = 0.3, γ = 0.5, split inertia η = 0.35, 4 warm-up windows, 5 s windows over 300 s | `controller_mode: windowed_stochastic`, `simulation/handler.py` | Per-event queues (exponential service, FIFO) instead of Poisson counts per window; notebook `ROUTING_MODE = "random"` corresponds to the per-unit random broker choice; runs until stopped unless `duration` is set |
-| Load sweep over service-load targets 0.2 / 0.55 / 0.85 by scaling μ (cells 5–6, `run_load_sweep`) | `scripts/sweep_5x3.py` | Different design: scales demand, λ_i(r) = r·λ_i, up to the feasibility limit r_max ≈ 4.87; reports measured rather than target utilization |
+| — (no counterpart) | `controller_mode: capacity_safe_event_driven` (`simulation/handler.py::_algorithm1_update`) | Not in the paper or notebook: the notebook's event-style experiment uses the windowed scheme. This mode drives the event queues with exact Algorithm 1 steps (`iteration_step`) on planned rates, so the paper's per-iteration capacity guarantee applies to the planned routing |
+| Load sweep over service-load targets 0.2 / 0.55 / 0.85 by scaling μ (cells 5–6, `run_load_sweep`) | `scripts/sweep_5x3.py`, `scripts/compare_modes.py` | Different design: scales demand, λ_i(r) = r·λ_i, up to the feasibility limit r_max ≈ 4.87; reports measured rather than target utilization; compares all modes |
+| — | `model/symmetric.py`, `docs/symmetric_case.md` | Closed-form symmetric N × M optimum used as an oracle (not in the paper) |
 | Multistart and randomized best-response regressions (cells 7–8) | `tests/unit/test_math.py` (best response), `tests/unit/test_safe_step.py` | Partial port |
 | Time-varying capacities (`vary_*`, cell 1; frozen in the static experiments) | not implemented | Roadmap |
