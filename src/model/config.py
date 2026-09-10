@@ -89,7 +89,8 @@ def topology_from_config(config: dict) -> Topology:
         raise ValueError('topology.access_capacities must be a mapping "<source>-><broker>": capacity')
     src_map = {name: i for i, name in enumerate(sources)}
     brk_map = {name: j for j, name in enumerate(brokers)}
-    mu_links = np.full((len(sources), len(brokers)), np.nan)
+    mu_links = np.zeros((len(sources), len(brokers)))
+    specified = np.zeros(mu_links.shape, dtype=bool)   # not a value sentinel: NaN must stay an error
     for link, cap in access_cfg.items():
         parts = str(link).split('->')
         if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
@@ -100,10 +101,11 @@ def topology_from_config(config: dict) -> Topology:
         if brk_id not in brk_map:
             raise ValueError(f"access link {link!r}: unknown broker {brk_id!r}")
         i, j = src_map[src_id], brk_map[brk_id]
-        if not np.isnan(mu_links[i, j]):
+        if specified[i, j]:
             raise ValueError(f"access link {src_id}->{brk_id} is specified more than once")
         mu_links[i, j] = _number(cap, f"access capacity {link!r}")
-    missing = [f"{sources[i]}->{brokers[j]}" for i, j in zip(*np.where(np.isnan(mu_links)))]
+        specified[i, j] = True
+    missing = [f"{sources[i]}->{brokers[j]}" for i, j in zip(*np.where(~specified))]
     if missing:
         raise ValueError(f"missing access capacities for {missing}")
 
