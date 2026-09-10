@@ -7,6 +7,16 @@ best-respond. It implements the model and synchronous distributed algorithm
 of the WiOpt'26 paper, adds an event-driven queueing simulation, and
 continuously checks the paper's optimality conditions while it runs.
 
+Two execution backends run the same Algorithm 1 code:
+
+- **in-process (reference):** one Python process, analytic or event-driven
+  (`python -m src.cli run`). The regression gates run here.
+- **distributed:** one controller, N source and M broker processes (Docker
+  containers or local processes) connected over TCP, with explicit access
+  queues (μ_ij) at the sources and broker queues (μ_j), and a read-only
+  dashboard (`traffic-emulator up`). See
+  [docs/distributed.md](docs/distributed.md).
+
 - **Paper:** [arXiv:2602.03246](https://arxiv.org/abs/2602.03246)
   (extended version; Algorithm 1, Proposition 1).
 - **Reference implementation:**
@@ -98,7 +108,10 @@ global barrier; none is asynchronous (see [Roadmap](#roadmap)).
 
 ```
 src/
-  cli.py                 run a config or a generated N x M topology in any mode
+  cli.py                 `run` (in-process backend) and `up` (distributed backend)
+  distributed/           distributed backend: protocol (NDJSON over TCP),
+                         controller, source and broker workers, run settings,
+                         launcher (Docker Compose or local processes)
   model/                 topology + units + validation, configs (controller_mode),
                          delays, marginal costs, topology generator, symmetric oracle
   controller/
@@ -114,11 +127,13 @@ src/
                          append-only JSONL writer, incremental reader
   runtime/metadata.py    seeds, git SHA, run.json
   runtime/experiments.py shared static/event experiment runners
-  dashboard/app.py       Streamlit: launch/stop runs, live research views
+  dashboard/app.py       Streamlit: launch/stop in-process runs, live research
+                         views; observer-only for distributed runs
 scripts/                 load_sweep.py (1x1 M/M/1), sweep_5x3.py (high load),
                          compare_modes.py (three modes side by side)
-config/                  paper_5x3, convergence_5x3, capacity_safe_5x3, simple_1x1
-tests/                   unit, integration, regression (5x3 gate + fixture)
+config/                  paper_5x3, convergence_5x3, capacity_safe_5x3, simple_1x1, sparse_3x3
+tests/                   unit, integration (incl. distributed vs reference), regression
+Dockerfile, docker-compose.yml   one image; controller/broker/source/dashboard services
 ```
 
 Each run writes `runs/<name>/metrics.jsonl` (per-iteration records: λ_ij,
@@ -169,6 +184,33 @@ Also `--controller capacity_safe_event_driven|windowed_stochastic`,
 complete config is written to `<output-dir>/generated_config.yaml`; passing
 it back with `--config` reproduces the run exactly (the seed drives both the
 topology and the event RNG).
+
+### Distributed emulator
+
+One command starts the controller, N source and M broker containers and the
+dashboard (http://localhost:8501); Ctrl+C stops everything:
+
+```bash
+pip install -e .          # optional: provides `traffic-emulator` (else use python -m src.cli)
+traffic-emulator up --sources 5 --brokers 3 --config config/paper_5x3.yaml
+```
+
+This runs `docker compose --profile distributed up --build --scale source=5 --scale broker=3`
+on the resolved run config in `runs/distributed/`. Any N x M topology:
+
+```bash
+traffic-emulator up --sources 12 --brokers 4 --load 0.5 --seed 7
+```
+
+`--backend local` runs the same processes without Docker. Also `--window`,
+`--duration`, `--no-dashboard`, `--dashboard-port`, `--output-dir runs/NAME`,
+`--eta/--gamma/--delta-s`. `python -m scripts.verify_distributed_run runs/distributed`
+checks a finished run's rounds against the in-process reference. Each round, brokers compute their damped prices,
+sources their best responses, and the controller the common safe step and
+the Proposition 1 diagnostics. A round equals the reference
+`iteration_step` bit for bit (`tests/integration/test_distributed.py`).
+Architecture, protocol, where μ_ij and μ_j are modeled, and limitations:
+[docs/distributed.md](docs/distributed.md).
 
 ### Sparse topologies
 
@@ -253,21 +295,31 @@ run:
 python -m pytest -m "not slow"
 ```
 
+The `docker-smoke` CI job runs the distributed emulator in containers (5x3,
+40 s, via `python -m src.cli up --backend docker`) and checks its telemetry.
+
 ### Docker
 
-`Dockerfile` and `docker-compose.yml` define a single `emulator` service
-that runs `config/paper_5x3.yaml`. This is packaging only: one process, not a
-distributed testbed of source and broker containers (see Roadmap).
+`Dockerfile` builds one image for every role. `docker-compose.yml` has two
+profiles: `distributed` (controller, replicated `broker` and `source`
+services, dashboard; normally started by `traffic-emulator up`) and
+`reference` (the single-process emulator and the dashboard):
+
+```bash
+docker compose --profile reference up --build
+```
 
 ## Roadmap
 
-1. **Asynchronous controller** (after a literature review): independent
-   `BROKER_PRICE_UPDATE(j)`, `PRICE_SENT(j, i)`, `PRICE_RECEIVED(j, i)` and
-   `SOURCE_ROUTING_UPDATE(i)` events, per-source stale price views, no
-   global barrier. The paper leaves this to future work.
-2. Scheduled scenario events (step changes of source rates and capacities
-   at given times) on top of the notebook-style capacity variation, with
-   adaptation, queue build-up and recovery measured.
-3. `docker compose` with emulator and dashboard sharing run output.
-4. Optional multi-process deployment (source, broker, coordinator,
-   dashboard services) as a separate mode.
+1. **Asynchronous operation** (after a literature review): brokers publish
+   prices and sources best-respond on their own clocks with stale per-broker
+   price views, and no global barrier. The paper leaves this to future
+   work.
+2. **Dynamic capacities and rates in the distributed backend** (the
+   in-process backend already has the notebook's capacity variation), plus
+   scheduled scenario events with adaptation, queue build-up and recovery
+   measured.
+3. **Failures and restarts** of workers and the controller.
+4. **Kubernetes** deployment of the same services.
+
+Details: [docs/distributed.md](docs/distributed.md#next-steps).

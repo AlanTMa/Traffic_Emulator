@@ -30,12 +30,27 @@
 | Initial prices p⁽⁰⁾ | `marginal_prices_mm1(L0)` | `run_algorithm1`: `mm1_marginal_cost_vectorized(Λ⁽⁰⁾)` | |
 | Step 1: p ← (1−γ)p + γ C_j(Λ_j) | `p_new = (1-gamma)*p + gamma*p_model` | `synchronous.py::update_prices` | |
 | Step 2: best responses under p⁽ᵗ⁺¹⁾ | `best_response_mm1` per source | `iteration_step` | |
-| Step 3: s_j = min(1, (μ_j − δ_s − Λ_j)/(η Δ_j)) for Δ_j > 0 | `safe_fraction = (mu-eps-L)/Delta`, then `step = eta*min(1, ·)` | `synchronous.py::safe_step_bounds` | **Differs from the notebook.** The notebook omits η in the bound, so it is more conservative whenever the bound binds. The code follows the paper; the two agree on 5x3, where s_t = 1 |
+| Step 3: s_j = min(1, (μ_j − δ_s − Λ_j)/(η Δ_j)) for Δ_j > 0 | `safe_fraction = (mu-eps-L)/Delta`, then `step = eta*min(1, ·)` | `synchronous.py::safe_step_bounds` | **Differs from the notebook.** The notebook omits η in the bound, so it is more conservative whenever the bound binds. The code follows the paper by default; `safe_step_variant="notebook"` reproduces the notebook (used by the ported batteries, where the paper bound fails the 0.85 multistart). The two agree on 5x3, where s_t = 1 |
 | Step 4: s_t = min_j s_j; λ ← (1 − η s_t)λ + η s_t λ^BR | `candidate = l_mat + step*direction` | `iteration_step`; `SystemState.s_j`, `s_t` | |
 | Step 5: stop when route/price changes, price consistency and fixed point meet their tolerances | stops on `max(route_rel, price_rel) < tol` only | `run_algorithm1(tol)`, which matches the notebook; `run_algorithm1(require_certificate=True)` implements Step 5 | |
 | Route/price relative change | `route_rel`, `price_rel` | `SystemState.route_rel`, `price_rel`; telemetry | |
 | 5x3 parameters: η = 0.25, γ = 0.5, tol = 1e-10, max 4000 iterations | cell 4, bottom | `tests/regression/test_baseline_5x3.py` | 70 iterations; F_dist = 2.0157473649139757 |
 | Centralized reference F* | `solve_central_reference` (SLSQP + KKT polish) | `controller/central.py::solve_central` | F* = 2.0157473649138 |
+
+### Distributed execution backend
+
+| Algorithm 1 step | Runs in | Function (shared with the reference) |
+|---|---|---|
+| Loads Λ_j = Σ_i λ_ij | controller | `synchronous.compute_broker_loads` |
+| Step 1: damped price of broker j | broker j's process | `synchronous.broker_price` |
+| Step 2: best response of source i | source i's process | `synchronous.source_best_response` |
+| Steps 3–4: s_j, s_t, routing update | controller | `synchronous.apply_common_step` (also called by `iteration_step`) |
+| Proposition 1 residuals | controller | `diagnostics.compute_diagnostics` via `telemetry.schema.controller_snapshot` |
+
+Not in the paper or notebook, whose algorithm is described for distributed
+agents but implemented in one process. See [distributed.md](distributed.md).
+The access stage μ_ij is an explicit queue in each source process, and the
+broker stage μ_j an explicit queue in each broker process.
 
 ## Proposition 1 and certificates (Sec. IV-H, Table I)
 
