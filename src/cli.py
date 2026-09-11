@@ -269,6 +269,7 @@ def main():
 
     if args.command == "up":
         from src.distributed import launcher
+        sys.stdout.reconfigure(line_buffering=True)          # keep our lines in order with docker's output
         config = args.config or (None if args.sources is not None or args.brokers is not None
                                  else "config/paper_5x3.yaml")
         try:

@@ -69,6 +69,23 @@ def describe(run: dict):
         print(f"  note: {note}")
     print(f"  resolved config: {run['config_path']}; telemetry: {run['output_dir'] / 'metrics.jsonl'}")
 
+def lan_address():
+    """This machine's address on its local network (the interface of the default route), or None."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))                 # UDP: picks the route, sends nothing
+            address = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if address.startswith("127.") else address
+
+def print_dashboard_urls(port: int):
+    print(f"  dashboard: http://localhost:{port}")
+    address = lan_address()
+    if address:
+        print(f"             http://{address}:{port} from other devices, if this network allows "
+              f"device-to-device connections")
+
 # ---------------------------------------------------------------- local processes
 
 def start_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashboard_port: int = 8501,
@@ -95,7 +112,7 @@ def start_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, das
         procs.append(subprocess.Popen([py, "-m", "streamlit", "run", "src/dashboard/app.py", "--server.headless",
                                        "true", "--server.port", str(dashboard_port)], cwd=PROJECT_ROOT, env=dash_env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        print(f"  dashboard: http://localhost:{dashboard_port}")
+        print_dashboard_urls(dashboard_port)
     return procs
 
 def request_shutdown(port: int = CONTROL_PORT, host: str = "127.0.0.1"):
@@ -135,8 +152,28 @@ def run_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashb
 def compose_command(run: dict, dashboard: bool = True, duration: float = None) -> list:
     services = [] if dashboard else ["controller", "broker", "source"]
     finite = ["--exit-code-from", "controller"] if duration is not None else []   # end with the controller
-    return ["docker", "compose", "--profile", "distributed", "up", "--build", *finite,
+    # The dashboard container's log only repeats Streamlit's URLs as seen from inside the
+    # container (its Docker-network address), which do not work; the launcher prints usable ones
+    quiet = ["--no-attach", "dashboard"] if dashboard else []
+    return ["docker", "compose", "--profile", "distributed", "up", "--build", *finite, *quiet,
             "--scale", f"source={run['n']}", "--scale", f"broker={run['m']}", *services]
+
+def docker_executable():
+    """
+    The docker CLI: on PATH, or in Docker Desktop's install folders (a terminal
+    opened before Docker was installed still has the old PATH).
+    """
+    found = shutil.which("docker")
+    if found:
+        return found
+    exe = "docker.exe" if os.name == "nt" else "docker"
+    folders = [Path(os.environ.get("LOCALAPPDATA", "~")) / "Programs" / "DockerDesktop" / "resources" / "bin",
+               Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "resources" / "bin",
+               Path("/Applications/Docker.app/Contents/Resources/bin"), Path("/usr/local/bin")]
+    for folder in folders:
+        if (folder / exe).is_file():
+            return str(folder / exe)
+    return None
 
 def compose_env(run: dict, duration: float = None, dashboard_port: int = 8501) -> dict:
     out = Path(run["output_dir"]).resolve()
@@ -154,15 +191,24 @@ def compose_env(run: dict, duration: float = None, dashboard_port: int = 8501) -
     return env
 
 def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashboard_port: int = 8501) -> int:
-    if shutil.which("docker") is None:
-        print("docker was not found on PATH. Install Docker, or run the same processes locally with --backend local.")
+    docker = docker_executable()
+    if docker is None:
+        print("docker was not found. Install Docker Desktop, or run the same processes locally with --backend local.")
         return 2
     env = compose_env(run, duration, dashboard_port)
+    env["PATH"] = str(Path(docker).parent) + os.pathsep + env.get("PATH", "")   # compose plugin, credential helper
+    try:
+        running = subprocess.run([docker, "info"], env=env, capture_output=True, timeout=30).returncode == 0
+    except subprocess.TimeoutExpired:
+        running = False
+    if not running:
+        print("Docker is installed but not running: start Docker Desktop, then run this again.")
+        return 2
     cmd = compose_command(run, dashboard, duration)
     print("  " + " ".join(cmd))
     if dashboard:
-        print(f"  dashboard: http://localhost:{dashboard_port}")
-    proc = subprocess.Popen(cmd, cwd=PROJECT_ROOT, env=env)
+        print_dashboard_urls(dashboard_port)
+    proc = subprocess.Popen([docker, *cmd[1:]], cwd=PROJECT_ROOT, env=env)
     try:
         code = proc.wait()
     except KeyboardInterrupt:
@@ -173,5 +219,5 @@ def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashbo
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
             proc.terminate()
             code = 130
-    subprocess.call(["docker", "compose", "--profile", "distributed", "down"], cwd=PROJECT_ROOT, env=env)
+    subprocess.call([docker, "compose", "--profile", "distributed", "down"], cwd=PROJECT_ROOT, env=env)
     return code

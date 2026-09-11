@@ -236,6 +236,19 @@ by default the run continues until Ctrl+C), `--no-dashboard`,
 directory), `--dashboard-port`, `--port` (local backend's controller port),
 `--eta/--gamma/--delta-s`.
 
+The launcher prints the dashboard's address on this machine and on the local
+network. The second works from other devices only if the network allows
+device-to-device connections; campus and enterprise Wi-Fi often doesn't.
+Streamlit's own startup lines are misleading here, so the launcher hides
+them (`docker compose logs dashboard` shows them). Inside a container, its
+"Network URL" is the container's address on Docker's private network, and
+its "External URL" is the network's public address, which needs port
+forwarding. Don't open the dashboard to the internet: it has no login.
+
+If `docker` isn't on PATH (a terminal opened before Docker Desktop was
+installed), the launcher looks in Docker Desktop's install folders, and it
+says so when Docker is installed but not running.
+
 On Ctrl+C, Compose sends SIGTERM to every container. Workers stop first
 (they depend on the controller), so the controller may log one skipped round
 before it writes its final record and exits. Every container exits with
