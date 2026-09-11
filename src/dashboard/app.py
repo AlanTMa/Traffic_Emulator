@@ -20,49 +20,36 @@ from src.model.config import controller_mode, load_config, with_controller_mode
 from src.model.generate import generate_topology_config
 from src.telemetry.metrics import JsonlTail
 
-st.set_page_config(page_title="Traffic Emulator Live Dashboard", layout="wide")
+st.set_page_config(page_title="Traffic emulator", layout="wide")
 
-# Configuration
 RUN_DIR = PROJECT_ROOT / "runs"
-# Output directory the dashboard launches into and reads from; override with
-# TRAFFIC_EMULATOR_OUTPUT_DIR (e.g. to view another run without touching runs/latest)
 OUTPUT_DIR = Path(os.environ.get("TRAFFIC_EMULATOR_OUTPUT_DIR", RUN_DIR / "latest"))
-METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"  # written by the simulation (schema: src/telemetry/schema.py)
-# The launched config and CLI log live with the run they belong to
+METRICS_FILE = OUTPUT_DIR / "metrics.jsonl"
 RUN_CONFIG = OUTPUT_DIR / "dashboard_config.yaml"
 RUN_LOG = OUTPUT_DIR / "dashboard.log"
-# Observer mode (TRAFFIC_EMULATOR_OBSERVER=1): watch a run started elsewhere, e.g. the distributed
-# emulator; the dashboard never launches or controls anything then.
+# observer: watch a run started elsewhere (the distributed launcher); no launch/stop
 OBSERVER = os.environ.get("TRAFFIC_EMULATOR_OBSERVER") == "1"
-REFRESH_RATE = 2 # seconds
-MAX_ROWS = 3000  # most recent iterations kept for plotting
+REFRESH_RATE = 2  # seconds
+MAX_ROWS = 3000   # rows kept for plotting
 
-st.title("🚀 Traffic Emulator: Live Convergence Dashboard")
+st.title("Traffic emulator")
 try:
     _shown = METRICS_FILE.resolve().relative_to(PROJECT_ROOT).as_posix()
 except ValueError:
     _shown = METRICS_FILE.as_posix()
-if OBSERVER:
-    st.markdown(f"Observing a run started elsewhere; charts update live from `{_shown}`.")
-else:
-    st.markdown(f"Set up a topology in the sidebar and launch a simulation; charts update live from `{_shown}`.")
+st.caption(_shown)
 
 MODE_HELP = {  # controller_mode -> (label, description)
-    "windowed_stochastic": ("Windowed stochastic (notebook)",
-                            "event-driven queues; prices from the measured EWMA load, inertial splits; "
-                            "no safe step, no per-iteration capacity guarantee"),
-    "capacity_safe_event_driven": ("Capacity-safe event-driven (Algorithm 1)",
-                                   "event-driven queues; planned routing advanced by exact Algorithm 1 "
-                                   "steps; planned Λ_j ≤ μ_j − δ_s at every update"),
-    "static_algorithm1": ("Static Algorithm 1 (no queues)",
-                          "Algorithm 1 on the analytic model; no events or queues"),
+    "windowed_stochastic": ("Windowed stochastic", "notebook scheme: prices from measured EWMA rates, no safe step"),
+    "capacity_safe_event_driven": ("Capacity-safe event-driven", "Algorithm 1 on planned rates over event-driven queues"),
+    "static_algorithm1": ("Static Algorithm 1", "analytic model, no queues"),
 }
 
-# --- Simulation process management ---
+# simulation subprocess
 
 @st.cache_resource
 def sim_process() -> dict:
-    """The dashboard's simulation subprocess, shared across reruns and browser tabs."""
+    """Shared across reruns and browser tabs."""
     holder = {"proc": None, "log": None, "label": ""}
     atexit.register(stop_simulation, holder)
     return holder
@@ -82,7 +69,7 @@ def launch_simulation(holder: dict, config: dict, label: str):
     stop_simulation(holder)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     RUN_CONFIG.write_text(yaml.safe_dump(config, sort_keys=False))
-    METRICS_FILE.unlink(missing_ok=True)  # start the charts from scratch
+    METRICS_FILE.unlink(missing_ok=True)
     holder["log"] = open(RUN_LOG, "w")
     holder["proc"] = subprocess.Popen(
         [sys.executable, "-u", "-m", "src.cli", "run", "--config", str(RUN_CONFIG), "--output-dir", str(OUTPUT_DIR)],
@@ -92,7 +79,7 @@ def launch_simulation(holder: dict, config: dict, label: str):
 
 holder = sim_process()
 
-# --- Sidebar: setup and launch ---
+# sidebar
 
 def run_metadata():
     try:
@@ -101,13 +88,12 @@ def run_metadata():
         return None
 
 def render_observer_sidebar():
-    """Observer mode: this dashboard only watches a run started elsewhere (distributed launcher)."""
     with st.sidebar:
-        st.header("Observing run")
+        st.header("Run")
         st.caption(f"`{OUTPUT_DIR}`")
         meta = run_metadata()
         if meta is None:
-            st.info("Waiting for the controller to write run.json ...")
+            st.info("waiting for run.json")
             return
         st.markdown(f"**Backend:** {meta.get('execution_backend', 'in_process')}  \n"
                     f"**Controller:** {meta.get('controller_mode')}  \n"
@@ -122,36 +108,33 @@ def render_observer_sidebar():
                     st.markdown(f"**{role}s:** " + ", ".join(f"{v} ({k})" for k, v in mapping.items()))
         for note in meta.get("notes", []):
             st.caption(note)
-        st.caption("The run is controlled by its launcher: stop it with Ctrl+C there.")
 
 if OBSERVER:
     render_observer_sidebar()
 else:
     with st.sidebar:
-        st.header("Simulation setup")
+        st.header("Setup")
         topology_source = st.radio("Topology", ["Generate", "Config file"], horizontal=True)
 
         if topology_source == "Generate":
-            n_sources = st.slider("Sources (producers)", 1, 20, 5)
-            n_brokers = st.slider("Brokers (service nodes)", 1, 10, 3)
-            load = st.slider("Target load", 0.05, 0.90, 0.30, 0.05,
-                             help="Total offered rate as a fraction of total broker capacity")
+            n_sources = st.slider("Sources", 1, 20, 5)
+            n_brokers = st.slider("Brokers", 1, 10, 3)
+            load = st.slider("Load", 0.05, 0.90, 0.30, 0.05, help="offered rate / broker capacity")
             seed = st.number_input("Seed", min_value=0, value=42, step=1)
             mode = st.selectbox("Controller mode", list(MODE_HELP), format_func=lambda m: MODE_HELP[m][0],
                                 help="\n\n".join(f"**{label}**: {text}" for label, text in MODE_HELP.values()))
             algorithm1 = mode != "windowed_stochastic"
             with st.expander("Controller parameters"):
-                window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5,
-                                         help="Seconds per controller iteration")
+                window = st.number_input("Window (s)", 0.5, 60.0, 5.0, 0.5)
                 if algorithm1:
-                    eta = st.slider("eta (Algorithm 1 step size)", 0.01, 1.0, 0.25)
+                    eta = st.slider("eta (step)", 0.01, 1.0, 0.25)
                     gamma = st.slider("gamma (price damping)", 0.01, 1.0, 0.50)
-                    delta_s = st.number_input("delta_s (capacity margin)", 0.0, 1.0, 1e-8, format="%.1e")
+                    delta_s = st.number_input("delta_s (margin)", 0.0, 1.0, 1e-8, format="%.1e")
                 else:
                     warmup = st.number_input("Warm-up windows", 0, 100, 4)
                     eta = st.slider("eta (split inertia)", 0.01, 1.0, 0.35)
                     gamma = st.slider("gamma (price smoothing)", 0.01, 1.0, 0.50)
-                    beta = st.slider("beta (arrival-rate EWMA)", 0.01, 1.0, 0.30)
+                    beta = st.slider("beta (rate EWMA)", 0.01, 1.0, 0.30)
         else:
             config_files = sorted((PROJECT_ROOT / "config").glob("*.yaml"))
             config_file = st.selectbox("Config", config_files, format_func=lambda p: p.name)
@@ -161,8 +144,7 @@ else:
                 config_mode = "windowed_stochastic"
             modes = list(MODE_HELP)
             file_mode = st.selectbox("Controller mode", modes, index=modes.index(config_mode),
-                                     format_func=lambda m: MODE_HELP[m][0], key="config_mode",
-                                     help="Another mode than the config's runs with that mode's default parameters")
+                                     format_func=lambda m: MODE_HELP[m][0], key="config_mode")
 
         launch_col, stop_col = st.columns(2)
         if launch_col.button("Launch", type="primary", width="stretch"):
@@ -196,18 +178,15 @@ if not OBSERVER and RUN_CONFIG.exists() and holder["label"]:
         src_col.dataframe(pd.DataFrame(topo_cfg["sources"]).rename(columns={"rate": "rate (work units/s)"}), hide_index=True)
         brk_col.dataframe(pd.DataFrame(topo_cfg["brokers"]).rename(columns={"capacity": "capacity (work units/s)"}), hide_index=True)
 
-# --- Live charts ---
+# charts
 
 VIEWS = ["Overview", "Brokers", "Routing", "Optimality", "Queues & latency"]
-# Read inside the fragment from session state: fragment reruns must use the
-# current selection, not a value captured by an earlier full run.
 view_col, scale_col = st.columns([4, 1])
 view_col.segmented_control("View", VIEWS, default="Overview", key="view")
 scale_col.segmented_control("Y scale", ["Log", "Linear"], default="Log", key="yscale",
-                            help="For relative change, marginal costs and residuals. Log: one label per power of ten. Linear: evenly spaced values that re-tick when you zoom.")
+                            help="relative change, marginal costs and residuals")
 
 def load_data():
-    # Incremental: each refresh parses only the rows appended since the last one
     if "metrics_tail" not in st.session_state:
         st.session_state.metrics_tail = JsonlTail(METRICS_FILE, max_rows=MAX_ROWS)
     tail = st.session_state.metrics_tail
@@ -216,7 +195,6 @@ def load_data():
         return None
     df = pd.DataFrame(rows)
     df.attrs["total_rows"] = tail.total_rows
-    # Scalar views of the per-broker records for the summary charts
     df["timestamp"] = df["sim_time"]
     df["rel_change"] = df[["route_rel", "price_rel"]].max(axis=1)
     df["max_util_planned"] = df["util_j"].apply(max)
@@ -236,15 +214,8 @@ def node_names(df):
     return [f"P{i}" for i in range(n_sources)], [f"SN{j + 1}" for j in range(n_brokers)]
 
 def log_axis(fig, values):
-    """
-    Y-axis for charts whose values span orders of magnitude.
-
-    Linear (selector): ordinary evenly spaced ticks that re-tick when zooming.
-    Log: one label per power of ten (or every k-th power, at most ~7 labels),
-    so every gap is the same factor. Plotly's default log ticks mix in bare
-    "2" and "5" labels (1, 5, 2, 0.1, 5, 2, ...) and are not used. Data
-    spanning less than one decade is drawn linearly, where it reads better.
-    """
+    """Log y-axis with one label per decade (plotly's default mixes in 2 and 5 labels);
+    linear when selected or when the data spans less than a decade."""
     v = np.asarray(values, dtype=float)
     v = v[np.isfinite(v) & (v > 0)]
     decades = np.log10(v.max() / v.min()) if v.size else 0.0
@@ -312,22 +283,19 @@ def render_overview(df):
     current_obj = df['objective'].iloc[-1]
     prev_obj = df['objective'].iloc[-2] if len(df) > 1 else current_obj
     rel_change = df['rel_change'].iloc[-1]
-    col1.metric("Current Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
-    col2.metric("Max Utilization", f"{df['max_util'].iloc[-1]:.2%}")
-    col3.metric("Rel. Change", "—" if pd.isna(rel_change) else f"{rel_change:.2e}")
+    col1.metric("Objective", f"{current_obj:.4f}", f"{current_obj - prev_obj:.4f}")
+    col2.metric("Max utilization", f"{df['max_util'].iloc[-1]:.2%}")
+    col3.metric("Rel. change", "-" if pd.isna(rel_change) else f"{rel_change:.2e}")
 
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
-        st.subheader("Objective Convergence")
-        fig_obj = px.line(df, x='iteration', y='objective',
-                          labels={'iteration': 'Iteration', 'objective': 'Total Delay'},
-                          title="System Objective vs Iteration")
+        st.subheader("Objective F")
+        fig_obj = px.line(df, x="iteration", y="objective", labels={"iteration": "Iteration", "objective": "F"})
         st.plotly_chart(fig_obj, width="stretch", key="chart_objective")
     with chart_col2:
-        st.subheader("Convergence Rate")
-        fig_conv = px.line(df, x='iteration', y='rel_change',
-                           labels={'iteration': 'Iteration', 'rel_change': 'Rel. Change'},
-                           title="Relative Change (Convergence Speed)", log_y=True)
+        st.subheader("Relative change")
+        fig_conv = px.line(df, x="iteration", y="rel_change",
+                           labels={"iteration": "Iteration", "rel_change": "max(route, price)"}, log_y=True)
         log_axis(fig_conv, df['rel_change'])
         st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
 
@@ -337,7 +305,6 @@ def render_brokers(df):
     st.subheader("Broker utilization")
     util = per_broker(df, "util_j", brokers)
     if measured:
-        # windowed_stochastic: planned (routing / capacity) vs measured (EWMA of arrivals)
         util["kind"] = "planned"
         util_m = per_broker(df, "util_measured_j", brokers).rename(columns={"util_measured_j": "util_j"})
         util_m["kind"] = "measured"
@@ -363,7 +330,6 @@ def render_brokers(df):
         st.plotly_chart(fig, width="stretch", key="chart_broker_price")
 
     if "mu_brokers_t" in df:
-        # dynamics.capacity_variation: capacities in effect at each window
         st.subheader("Broker capacities μ_j(t)")
         fig = px.line(per_broker(df, "mu_brokers_t", brokers), x="iteration", y="mu_brokers_t", color="broker",
                       labels={"iteration": "Iteration", "mu_brokers_t": "Capacity (work units/s)"})
@@ -395,7 +361,7 @@ def render_routing(df):
                         labels={"x": "Broker", "y": "Source", "color": "Fraction"}, aspect="auto")
         st.plotly_chart(fig, width="stretch", key="chart_routing_heatmap")
     with col2:
-        st.subheader("Per-source mean end-to-end delay (model)")
+        st.subheader("Per-source delay (model)")
         fig = px.line(per_source(df, "e2e_i", sources), x="iteration", y="e2e_i", color="source",
                       labels={"iteration": "Iteration",
                               "e2e_i": "Σ_j λ_ij (D_ij + D_j) / λ_i  (s)"})
@@ -415,19 +381,13 @@ def render_optimality(df):
     sources, brokers = node_names(df)
     last = df.iloc[-1]
 
-    # Proposition 1 certificate for the latest state (never a convergence claim)
-    if last["certified"]:
-        st.success(f"PASS · {last['certificate_status']} (iteration {int(last['iteration'])})")
-    else:
-        st.error(f"FAIL · {last['certificate_status']} (iteration {int(last['iteration'])})")
+    status = f"{last['certificate_status']} (iteration {int(last['iteration'])})"
+    (st.success if last["certified"] else st.error)(status)
     if last["controller_mode"] == "windowed_stochastic":
-        st.caption("windowed_stochastic prices follow noisy measured rates, so price consistency and the "
-                   "fixed point are not expected to hold exactly.")
+        st.caption("prices track measured rates here, so price consistency and the fixed point are not expected to hold")
     elif last["controller_mode"] == "capacity_safe_event_driven":
-        st.caption("The certificate refers to the planned routing and model prices of the Algorithm 1 "
-                   "controller. Measured queues and sojourn times are in 'Queues & latency'.")
+        st.caption("the certificate is on the planned routing; measured queues are under Queues & latency")
 
-    # Total marginal cost per route; unused routes (in the latest state) dotted
     st.subheader("Total marginal cost C_ij + C_j")
     marg = per_route(df, "M_ij", sources, brokers)
     active_now = pd.DataFrame(last["active_ij"], index=sources, columns=brokers)
@@ -442,8 +402,7 @@ def render_optimality(df):
 
     col1, col2 = st.columns(2)
     with col1:
-        # KKT / Wardrop: used routes equalize at alpha_i, unused routes lie at or above it
-        st.subheader("KKT / Wardrop equalization (latest)")
+        st.subheader("Marginal costs, latest iteration")
         current = pd.DataFrame({
             "source": np.repeat(sources, len(brokers)),
             "broker": np.tile(brokers, len(sources)),
@@ -469,10 +428,10 @@ def render_optimality(df):
             fig.update_yaxes(range=[0, 1.05])
             st.plotly_chart(fig, width="stretch", key="chart_safe_step")
         else:
-            st.info("This controller mode has no safe step (windowed_stochastic); see static_algorithm1.")
+            st.info("no safe step in this mode")
 
-    st.subheader("Residual diagnostics")
-    floor = 1e-18  # exact zeros cannot be drawn on a log axis
+    st.subheader("Residuals")
+    floor = 1e-18  # zeros can't go on a log axis
     resid = pd.DataFrame({label: df[key].astype(float).clip(lower=floor)
                           for key, (label, _) in RESIDUALS.items() if key in df})
     resid["iteration"] = df["iteration"].to_numpy()
@@ -488,20 +447,17 @@ def render_optimality(df):
 
 def render_queues(df):
     if "latency_mean" not in df:
-        st.info("Queue and latency metrics come from the event-driven simulation (windowed_stochastic); "
-                "static_algorithm1 has no events or queues.")
+        st.info("no queues in this mode")
         return
     sources, brokers = node_names(df)
     last = df.iloc[-1]
     col1, col2, col3, col4 = st.columns(4)
-    st.caption("Each event is one normalized unit of work (5x3 instance: 1 unit = 1 MB); latency is the "
-               "end-to-end sojourn time of a work unit, not a message latency.")
     col1.metric("Work units completed", f"{int(last['completed_total']):,}")
-    col2.metric("Mean latency (run)", f"{last['latency_mean_total']:.4f} s")
+    col2.metric("Mean sojourn (run)", f"{last['latency_mean_total']:.4f} s")
     col3.metric("p95 (last window)", f"{last['latency_p95']:.4f} s")
     col4.metric("p99 (last window)", f"{last['latency_p99']:.4f} s")
 
-    st.subheader("End-to-end work-unit sojourn time per window")
+    st.subheader("Sojourn time per window")
     lat = df[["iteration", "latency_mean", "latency_p50", "latency_p95", "latency_p99"]].rename(
         columns={"latency_mean": "mean", "latency_p50": "p50", "latency_p95": "p95", "latency_p99": "p99"})
     fig = px.line(lat.melt(id_vars="iteration", var_name="statistic", value_name="latency"),
@@ -511,7 +467,7 @@ def render_queues(df):
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Per-source mean latency: measured vs model")
+        st.subheader("Per-source sojourn: measured vs model")
         measured = per_source(df, "latency_mean_i", sources).rename(columns={"latency_mean_i": "latency"})
         measured["kind"] = "measured"
         model = per_source(df, "e2e_i", sources).rename(columns={"e2e_i": "latency"})
@@ -534,8 +490,6 @@ def render_queues(df):
 RENDERERS = {"Overview": render_overview, "Brokers": render_brokers, "Routing": render_routing,
              "Optimality": render_optimality, "Queues & latency": render_queues}
 
-# The fragment re-runs on its own every REFRESH_RATE seconds, so each chart
-# key is registered exactly once per run.
 @st.fragment(run_every=REFRESH_RATE)
 def render_dashboard():
     df = load_data()
@@ -543,12 +497,11 @@ def render_dashboard():
 
     if df is not None and not df.empty:
         if df.attrs["total_rows"] > len(df):
-            st.caption(f"Showing the latest {len(df):,} of {df.attrs['total_rows']:,} iterations; "
-                       f"the full log is {METRICS_FILE.relative_to(PROJECT_ROOT)}.")
+            st.caption(f"last {len(df):,} of {df.attrs['total_rows']:,} iterations")
         RENDERERS[st.session_state.get("view") or "Overview"](df)
     elif is_running(holder):
-        st.info("Simulation started; the first point appears after the first window.")
+        st.info("waiting for the first window")
     else:
-        st.info("No simulation data yet. Choose a topology in the sidebar and press **Launch**.")
+        st.info("no data yet")
 
 render_dashboard()
