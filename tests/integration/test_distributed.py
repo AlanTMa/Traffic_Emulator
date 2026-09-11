@@ -203,6 +203,43 @@ def test_prepare_run_validation(tmp_path):
     env = launcher.compose_env({**run, "output_dir": ROOT / "runs" / "ci"}, 30)
     assert env["TE_CONFIG"] == "runs/ci/resolved_config.yaml" and env["TE_DURATION"] == "30"
 
+def test_dashboard_link_waits_for_the_dashboard():
+    import http.server
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/_stcore/health" else 404)
+            self.end_headers()
+        def log_message(self, *args):
+            pass
+    server = http.server.HTTPServer(("127.0.0.1", 0), Health)
+    import threading
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert launcher.dashboard_ready(server.server_address[1], timeout=5)
+    finally:
+        server.shutdown()
+    assert not launcher.dashboard_ready(free_port(), timeout=1.5)     # nothing listening
+
+def test_link_waits_for_this_runs_first_round(tmp_path):
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text('{"iteration": 1}\n')                           # left over from an earlier run
+    since = time.time() + 1.0
+    assert not launcher.first_round_written(metrics, since, timeout=0.6)
+    time.sleep(1.1)
+    metrics.write_text('{"iteration": 1}\n')                           # this run's first record
+    assert launcher.first_round_written(metrics, since, timeout=2)
+
+def test_local_launch_refuses_ports_in_use(tmp_path, capsys):
+    run = launcher.prepare_run(str(PAPER), output_dir=tmp_path / "out")
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        assert launcher.port_in_use(port)
+        assert launcher.run_local(run, port=port, dashboard=False) == 2          # started nothing
+        assert launcher.run_local(run, port=free_port(), dashboard_port=port) == 2
+    assert "already in use" in capsys.readouterr().out
+
 def test_docker_found_outside_a_stale_path(monkeypatch, tmp_path):
     # A terminal opened before Docker Desktop was installed: not on PATH, but in its install folder
     folder = tmp_path / "Programs" / "DockerDesktop" / "resources" / "bin"

@@ -21,7 +21,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -80,11 +82,60 @@ def lan_address():
     return None if address.startswith("127.") else address
 
 def print_dashboard_urls(port: int):
-    print(f"  dashboard: http://localhost:{port}")
+    lines = ["", f"==> Dashboard ready: http://localhost:{port}"]
     address = lan_address()
     if address:
-        print(f"             http://{address}:{port} from other devices, if this network allows "
-              f"device-to-device connections")
+        lines.append(f"    Other devices on this network: http://{address}:{port} "
+                     f"(if the network allows device-to-device connections)")
+    print("\n".join(lines + [""]), flush=True)
+
+def port_in_use(port: int) -> bool:
+    """Whether something on this machine already accepts connections on the port."""
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+def dashboard_ready(port: int, timeout: float) -> bool:
+    """Wait until the dashboard on this machine answers its health check."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/_stcore/health", timeout=2) as reply:
+                if reply.status == 200:
+                    return True
+        except OSError:
+            pass
+        time.sleep(1)
+    return False
+
+def first_round_written(metrics: Path, since: float, timeout: float) -> bool:
+    """Wait until this run's controller has written its first telemetry record."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            info = metrics.stat()
+            if info.st_size > 0 and info.st_mtime >= since:
+                return True
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return False
+
+def announce_dashboard(port: int, hint: str, timeout: float, metrics: Path = None):
+    """
+    Print the dashboard's URLs once it answers and the first round is recorded.
+    Runs in the background, so the link appears below the build and startup
+    output (where it stays visible) instead of scrolling away above it.
+    """
+    since = time.time()
+    def wait():
+        if not dashboard_ready(port, timeout):
+            print(f"==> The dashboard did not answer on port {port} within {timeout:.0f} s; {hint}", flush=True)
+            return
+        if metrics is not None:
+            first_round_written(metrics, since, timeout=120)
+        print_dashboard_urls(port)
+    threading.Thread(target=wait, daemon=True).start()
 
 # ---------------------------------------------------------------- local processes
 
@@ -112,7 +163,8 @@ def start_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, das
         procs.append(subprocess.Popen([py, "-m", "streamlit", "run", "src/dashboard/app.py", "--server.headless",
                                        "true", "--server.port", str(dashboard_port)], cwd=PROJECT_ROOT, env=dash_env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        print_dashboard_urls(dashboard_port)
+        announce_dashboard(dashboard_port, f"is port {dashboard_port} already in use? Try --dashboard-port",
+                           timeout=60, metrics=Path(run["output_dir"]) / "metrics.jsonl")
     return procs
 
 def request_shutdown(port: int = CONTROL_PORT, host: str = "127.0.0.1"):
@@ -137,6 +189,11 @@ def stop_local(procs: list, port: int = CONTROL_PORT, grace: float = 10.0):
 
 def run_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashboard_port: int = 8501,
               duration: float = None) -> int:
+    for used, flag in ((port, "--port"), (dashboard_port, "--dashboard-port")):
+        if (used != dashboard_port or dashboard) and port_in_use(used):
+            print(f"Port {used} is already in use (is another emulator or dashboard running?). "
+                  f"Stop it, or choose another port with {flag}.")
+            return 2
     procs = start_local(run, port, dashboard, dashboard_port, duration)
     print(f"  {len(procs)} processes started; Ctrl+C stops everything")
     try:
@@ -204,10 +261,24 @@ def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashbo
     if not running:
         print("Docker is installed but not running: start Docker Desktop, then run this again.")
         return 2
+    # One emulator per project: a second `compose up` would silently take over the running containers
+    active = subprocess.run([docker, "compose", "--profile", "distributed", "--profile", "reference", "ps", "-q"],
+                            cwd=PROJECT_ROOT, env=env, capture_output=True, text=True)
+    if active.stdout.strip():
+        print("An emulator is already running in Docker. Stop it first (Ctrl+C in its terminal, or "
+              "`docker compose --profile distributed down`), then run this again.")
+        return 2
+    if dashboard and port_in_use(dashboard_port):
+        print(f"Port {dashboard_port} is already in use (another dashboard?). Stop it, or choose another port "
+              f"with --dashboard-port.")
+        return 2
     cmd = compose_command(run, dashboard, duration)
     print("  " + " ".join(cmd))
     if dashboard:
-        print_dashboard_urls(dashboard_port)
+        print(f"  dashboard: http://localhost:{dashboard_port} (the link is shown again once it is ready)")
+        announce_dashboard(dashboard_port, "see why with: docker compose --profile distributed logs dashboard",
+                           timeout=900,                           # the first build takes a few minutes
+                           metrics=Path(run["output_dir"]) / "metrics.jsonl")
     proc = subprocess.Popen([docker, *cmd[1:]], cwd=PROJECT_ROOT, env=env)
     try:
         code = proc.wait()

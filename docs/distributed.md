@@ -236,8 +236,8 @@ by default the run continues until Ctrl+C), `--no-dashboard`,
 directory), `--dashboard-port`, `--port` (local backend's controller port),
 `--eta/--gamma/--delta-s`.
 
-The launcher prints the dashboard's address on this machine and on the local
-network. The second works from other devices only if the network allows
+Once the dashboard answers, the launcher prints its address on this machine
+and on the local network (below the startup output, so it doesn't scroll away). The second works from other devices only if the network allows
 device-to-device connections; campus and enterprise Wi-Fi often doesn't.
 Streamlit's own startup lines are misleading here, so the launcher hides
 them (`docker compose logs dashboard` shows them). Inside a container, its
