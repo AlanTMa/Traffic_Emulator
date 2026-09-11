@@ -93,8 +93,9 @@ def test_paper_steps_cycle_on_5x3():
     period_1 = max(np.abs(tail[k] - tail[k - 1]).max() for k in range(1, 20))
     period_2 = max(np.abs(tail[k] - tail[k - 2]).max() for k in range(2, 20))
     assert period_1 > 0.5 and period_2 < 1e-3
-    loads = sorted([tuple(np.round(L.sum(axis=0), 1)) for L in tail[-2:]])
-    assert loads == [(12.4, 16.0, 16.6), (16.6, 15.6, 12.9)]
+    # brokers are interchangeable here, so which one carries which load depends on the LP's tie-breaking
+    loads = sorted(sorted(np.round(L.sum(axis=0), 1)) for L in tail[-2:])
+    assert loads == [[12.4, 16.0, 16.6], [12.9, 15.6, 16.6]]
     assert not compute_diagnostics(state.lambda_ij, state.prices, topo)["certified"]
 
 @pytest.mark.parametrize("n, m, lam, mu_a, mu_s, which", [
