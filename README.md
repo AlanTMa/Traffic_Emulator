@@ -116,7 +116,7 @@ src/
                          controller, source and broker workers, run settings,
                          launcher (Docker Compose or local processes)
   model/                 topology + units + validation, configs (controller_mode),
-                         delays, marginal costs, topology generator, symmetric oracle
+                         marginal costs, topology generator, symmetric oracle
   controller/
     synchronous.py       Algorithm 1: iteration_step, safe_step_bounds, run_algorithm1
     best_response.py     exact threshold best response (eq. 16)
@@ -132,8 +132,8 @@ src/
   runtime/experiments.py shared static/event experiment runners
   dashboard/app.py       Streamlit: launch/stop in-process runs, live research
                          views; observer-only for distributed runs
-scripts/                 load_sweep.py (1x1 M/M/1), sweep_5x3.py (high load),
-                         compare_modes.py (three modes side by side)
+scripts/                 sweep_5x3.py (high load), compare_modes.py (three modes
+                         side by side), verify_distributed_run.py
 config/paper_5x3.yaml    the canonical 5x3 instance (exact notebook parameters)
 tests/                   unit, integration (incl. distributed vs reference), regression
 Dockerfile, docker-compose.yml   one image; controller/broker/source/dashboard services
@@ -274,7 +274,7 @@ Algorithm 1, an event simulation of that optimum (queueing validation),
 `capacity_safe_event_driven` and `windowed_stochastic`, reporting planned and
 actual utilization per broker and per access path, safe-step activity,
 headroom, queue growth, p95/p99 and the measured-vs-analytical gap; results
-go to `runs/sweep_5x3/`. The 1x1 M/M/1 check is `python -m scripts.load_sweep`.
+go to `runs/sweep_5x3/`.
 
 Side-by-side comparison of the three modes on one topology (same seed for
 both event modes; `--config`, `--multiplier`, `--duration`, `--warmup-time`):

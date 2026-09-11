@@ -1,16 +1,7 @@
 import numpy as np
 import pytest
-from src.model.delays import mm1_delay, mm1_delay_vectorized
 from src.model.marginal_costs import mm1_marginal_cost, mm1_marginal_cost_vectorized
 from src.controller.best_response import best_response_mm1
-
-def test_mm1_delay():
-    # Case: mu=10, x=5 -> D = 1/(10-5) = 0.2
-    assert mm1_delay(5.0, 10.0) == pytest.approx(0.2)
-    # Case: mu=10, x=9 -> D = 1/1 = 1.0
-    assert mm1_delay(9.0, 10.0) == pytest.approx(1.0)
-    # Case: stability violation
-    assert mm1_delay(11.0, 10.0) > 1e10
 
 def test_mm1_marginal_cost():
     # Case: mu=10, x=5 -> C = 10/(10-5)^2 = 10/25 = 0.4

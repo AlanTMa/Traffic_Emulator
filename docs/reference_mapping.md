@@ -10,7 +10,7 @@
 
 | Paper | Notebook | Traffic_Emulator | Notes |
 |---|---|---|---|
-| Access delay D_ij = 1/(μ_ij − λ_ij) (eq. 1) | `per_source_mean_e2e` (cell 4) | `model/delays.py`; `controller/diagnostics.py::marginal_costs` (`D_ij`) | |
+| Access delay D_ij = 1/(μ_ij − λ_ij) (eq. 1) | `per_source_mean_e2e` (cell 4) | `controller/diagnostics.py::marginal_costs` (`D_ij`) | |
 | Broker delay D_j = 1/(μ_j − Λ_j) (eq. 2) | `per_source_mean_e2e` (cell 4) | same (`D_j`) | |
 | Objective F = Σ λ_ij D_ij + Σ Λ_j D_j (eqs. 4, 9) | `objective_flow_weighted_at` (cell 4) | `controller/central.py::system_objective` | Flow-weighted sum, not divided by Σλ; +∞ outside the open domain |
 | Access marginal cost C_ij = μ_ij/(μ_ij − λ_ij)² (eq. 12) | inline in `verification_residuals` | `diagnostics.py::marginal_costs` (`C_ij`) | |
