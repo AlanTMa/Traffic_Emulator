@@ -1,9 +1,4 @@
-"""
-controller_mode: capacity_safe_event_driven
-
-Event-driven queues whose planned routing is advanced by exact Algorithm 1
-steps (synchronous.iteration_step) at every window boundary.
-"""
+"""capacity_safe_event_driven: Algorithm 1 steps on planned rates over event-driven queues."""
 import json
 from pathlib import Path
 
@@ -57,9 +52,9 @@ def binding_instance():
                     np.array([10.5, 1000.0]), ["A", "B"], ["SN1", "SN2"])
     return topo, np.array([[0.0, 10.0], [10.0, 0.0]]), np.array([0.0, 1e3])
 
-# 1-3. Planned conservation, broker feasibility (margin delta_s), access feasibility
+# Planned conservation, broker feasibility (margin delta_s), access feasibility
 
-def test_planned_state_is_feasible_at_every_update(run_5x3, topo_5x3):
+def test_planned_state_feasible(run_5x3, topo_5x3):
     _, _, handler = run_5x3
     rows = list(handler.telemetry.history)
     assert len(rows) == 20
@@ -71,7 +66,7 @@ def test_planned_state_is_feasible_at_every_update(run_5x3, topo_5x3):
         assert r["controller_mode"] == "capacity_safe_event_driven"
         assert r["s_t"] == 1.0 and len(r["s_j"]) == 3 and r["br_failures"] == []
 
-# 4. One event-mode update equals one static Algorithm 1 step from the same state
+# One event-mode update equals one static Algorithm 1 step from the same state
 
 def test_single_update_equals_iteration_step(topo_5x3):
     engine, _, handler = make_handler(topo_5x3, telemetry=False)
@@ -83,7 +78,7 @@ def test_single_update_equals_iteration_step(topo_5x3):
     assert np.array_equal(handler.prices, expected.prices)
     assert handler.s_t == s_t and np.array_equal(handler.s_j, expected.s_j)
 
-def test_update_sequence_equals_static_algorithm1(run_5x3, topo_5x3):
+def test_updates_equal_static(run_5x3, topo_5x3):
     _, _, handler = run_5x3
     static = run_algorithm1(topo_5x3, eta=0.25, gamma=0.5, tol=0.0, max_iter=20, eps=1e-12, delta_s=DELTA_S)
     assert np.array_equal(handler.x_ij, static.lambda_ij)
@@ -93,7 +88,7 @@ def test_update_sequence_equals_static_algorithm1(run_5x3, topo_5x3):
     other_seed.engine.run(duration=100.0, handler=other_seed.handle_event)
     assert np.array_equal(other_seed.x_ij, handler.x_ij)
 
-# 5. The safe step binds and holds the margin
+# The safe step binds and holds the margin
 
 def test_safe_step_binds_in_event_mode():
     topo, lam0, stale_prices = binding_instance()
@@ -108,15 +103,15 @@ def test_safe_step_binds_in_event_mode():
     assert np.array_equal(handler.x_ij, expected.lambda_ij)
     assert handler.x_ij.sum(axis=0)[0] == pytest.approx(10.5 - delta_s, abs=1e-9)
 
-def test_initial_routing_must_respect_the_margin():
+def test_initial_routing_margin():
     topo, _, _ = binding_instance()
     too_full = np.array([[0.5, 9.5], [10.0, 0.0]])   # SN1 planned 10.5 > 10.5 - delta_s
     with pytest.raises(ValueError, match="mu_j - delta_s"):
         make_handler(topo, too_full)
 
-# 6. Queues keep working across controller updates
+# Queues keep working across controller updates
 
-def test_work_units_are_conserved_across_updates(run_5x3):
+def test_work_units_conserved(run_5x3):
     _, state, handler = run_5x3
     in_system = lambda q: len(q.queue) + int(q.is_busy)
     queued = sum(in_system(q) for row in state.access_queues.values() for q in row.values())
@@ -129,9 +124,9 @@ def test_work_units_are_conserved_across_updates(run_5x3):
     # Mean sojourn time is consistent with the planned M/M/1 model at this load
     assert rows[-1]["latency_mean_total"] == pytest.approx(np.mean([r["e2e_i"][2] for r in rows]), rel=0.2)
 
-# 7. Arrivals are routed with the updated planned fractions
+# Arrivals are routed with the updated planned fractions
 
-def test_routing_probabilities_follow_updated_plan(topo_5x3):
+def test_routing_follows_plan(topo_5x3):
     engine, _, handler = make_handler(topo_5x3, telemetry=False)
     draws = []
 
@@ -159,7 +154,7 @@ def test_routing_probabilities_follow_updated_plan(topo_5x3):
     for p in after:
         assert any(np.allclose(p, row, rtol=0, atol=1e-15) for row in fractions_1)
 
-# 8-9. Seeded reproducibility, mode in telemetry and run.json
+# Seeded reproducibility, mode in telemetry and run.json
 
 def _cli_rows(tmp_path, name, seed):
     cfg = with_controller_mode(load_config(CONFIG), "capacity_safe_event_driven")
@@ -171,7 +166,7 @@ def _cli_rows(tmp_path, name, seed):
             for line in (tmp_path / name / "metrics.jsonl").read_text().splitlines()]
     return rows, json.loads((tmp_path / name / "run.json").read_text())
 
-def test_seeded_runs_reproduce_and_mode_is_recorded(tmp_path):
+def test_seeded_runs_reproduce(tmp_path):
     rows_a, meta = _cli_rows(tmp_path, "a", 5)
     rows_b, _ = _cli_rows(tmp_path, "b", 5)
     rows_c, _ = _cli_rows(tmp_path, "c", 6)

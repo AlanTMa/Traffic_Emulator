@@ -1,12 +1,7 @@
 """
-5x3 regression gate against the ANRG reference notebook.
-
-The expected values in data/baseline_5x3.json were produced by running the
-notebook's own functions on its exact seed-42 instance (see "provenance" in
-the file). The canonical objective is F* = 2.0157473649138 (notebook-printed).
-The value 2.015766 that earlier versions of this test asserted comes from
-running the same algorithm on the instance rounded to 3 decimals (e.g.
-lambda_P2 = 30.059 instead of 30.05859375); it is not a paper value.
+5x3 regression against the notebook. data/baseline_5x3.json was produced by the
+notebook's own functions on its seed-42 instance (see its provenance field);
+F* = 2.0157473649138.
 """
 import json
 from pathlib import Path
@@ -93,7 +88,7 @@ def test_distributed_endpoint_is_certified(distributed, topology):
     assert d["certified"], d["failed"]
     assert d["status"] == CERTIFIED_MESSAGE
 
-def test_distributed_residuals_match_notebook_table(distributed, topology):
+def test_residuals_match_notebook(distributed, topology):
     d = compute_diagnostics(distributed.lambda_ij, distributed.prices, topology)
     notebook = BASELINE["residuals"]["distributed"]
     for key in CERT_KEYS:
@@ -127,7 +122,7 @@ def test_certificate_rejects_non_optimal_states(topology):
     d5 = compute_diagnostics(early.lambda_ij, early.prices, topology)
     assert not d5["certified"] and "r_price" in d5["failed"]
 
-def test_step5_stopping_rule_certifies_at_high_load():
+def test_step5_certifies_at_high_load():
     # At 95% of the largest feasible multiplier, stopping on route/price change
     # alone (notebook rule) leaves KKT complementarity above its absolute
     # tolerance; the paper's Step 5 rule keeps iterating until certified.

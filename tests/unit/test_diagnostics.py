@@ -32,7 +32,7 @@ def test_stale_prices_fail_price_consistency():
     assert not d["certified"]
     assert "r_price" in d["failed"]
 
-def test_unbalanced_routing_fails_kkt_and_fixed_point():
+def test_unbalanced_routing_not_certified():
     topo, _, _ = _symmetric()
     lam = np.array([[3.0, 1.0], [3.0, 1.0]])
     prices = marginal_costs(lam, topo.mu_links, topo.mu_brokers)["C_j"]  # price-consistent
@@ -42,7 +42,7 @@ def test_unbalanced_routing_fails_kkt_and_fixed_point():
     assert {"r_fixed_point", "r_active_stationarity", "r_kkt_complementarity"} <= set(d["failed"])
     assert np.all(d["active_spread_i"] > 0.1)
 
-def test_cheaper_unused_route_fails_inactive_complementarity():
+def test_cheaper_unused_route():
     topo, _, _ = _symmetric()
     lam = np.array([[4.0, 0.0], [4.0, 0.0]])      # everyone on the busier broker
     prices = marginal_costs(lam, topo.mu_links, topo.mu_brokers)["C_j"]

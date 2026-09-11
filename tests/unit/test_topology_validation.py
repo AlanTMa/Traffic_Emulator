@@ -25,7 +25,7 @@ def test_valid_config_parses():
     assert t.mu_links.tolist() == [[5.0, 6.0], [4.0, 7.0]]
     assert t.sources == ["A", "B"] and t.brokers == ["S1", "S2"]
 
-def test_whitespace_around_link_ids_is_accepted():
+def test_link_id_whitespace():
     t = topology_from_config(with_change(lambda t: t.update(access_capacities={
         "A -> S1": 5.0, "A->S2": 6.0, "B->S1": 4.0, "B->S2": 7.0})))
     assert t.mu_links[0, 0] == 5.0
@@ -109,7 +109,7 @@ def test_shipped_configs_are_valid():
 
 # --- Feasibility LP at the boundary ---
 
-def test_feasibility_rejects_exactly_critical_instances():
+def test_lp_rejects_critical_instances():
     from src.controller.feasibility import transportation_feasibility
     # One source sending exactly its two links' capacity: zero headroom
     with pytest.raises(ValueError, match="headroom"):

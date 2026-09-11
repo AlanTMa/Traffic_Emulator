@@ -75,7 +75,7 @@ def test_event_service_uses_current_capacity():
     assert before < 0.25
 
 @pytest.mark.parametrize("mode", ["capacity_safe_event_driven", "windowed_stochastic", "static_algorithm1"])
-def test_cli_runs_with_time_varying_capacities(tmp_path, mode):
+def test_cli_dynamics(tmp_path, mode):
     cfg = with_controller_mode(load_config("config/paper_5x3.yaml"), mode)
     cfg["simulation"].update(duration=60, seed=2)
     cfg["dynamics"] = {"capacity_variation": {"combo": 2}}

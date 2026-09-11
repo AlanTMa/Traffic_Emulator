@@ -1,12 +1,7 @@
 """
-Distributed backend: controller, source and broker processes.
-
-Mathematical correctness is tested separately from process scheduling:
-- the controller's round logic, fed by the real actor-side functions over the
-  real wire encoding, must reproduce synchronous.iteration_step bit-for-bit;
-- live multi-process runs must reproduce the reference Algorithm 1 iterates
-  exactly (planned rates do not depend on traffic timing) and satisfy the
-  feasibility invariants, while traffic, queues and latency keep flowing.
+Distributed backend. A round fed by the real actor-side functions over the real wire
+encoding must equal iteration_step bit for bit; live multi-process runs must match
+run_algorithm1 round by round while traffic keeps flowing.
 """
 import asyncio
 import json
@@ -75,7 +70,7 @@ def reference_config(path=PAPER):
     cfg["algorithm"] = {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12}
     return cfg
 
-def test_distributed_round_matches_reference_iteration_step():
+def test_round_matches_iteration_step():
     cfg = reference_config()
     ctl = controller_with_fake_actors(cfg)
     topo = ctl.topology
@@ -100,7 +95,7 @@ def test_distributed_round_matches_reference_iteration_step():
     assert record["certificate_status"] == ref_diag["status"]
     assert record["execution_backend"] == "distributed"
 
-def test_distributed_round_matches_reference_when_safe_step_binds():
+def test_round_binding_safe_step():
     # 2x2 instance where a stale low price makes the safe step bind (s_t = 0.2)
     cfg = {"simulation": {"controller_mode": "capacity_safe_event_driven"},
            "algorithm": {"eta": 0.25, "gamma": 0.01, "delta_s": 1e-6, "eps": 1e-12},
@@ -115,7 +110,7 @@ def test_distributed_round_matches_reference_when_safe_step_binds():
     assert np.array_equal(ctl.state.lambda_ij, ref.lambda_ij) and np.array_equal(ctl.state.prices, ref.prices)
     assert ctl.state.lambda_ij.sum(axis=0)[0] == pytest.approx(10.5 - 1e-6, abs=1e-9)
 
-def test_registration_is_idempotent_and_bounded():
+def test_registration():
     ctl = ControllerService(reference_config(), output_dir="unused")
     assert [ctl._assign("source", f"s{i}") for i in range(5)] == [0, 1, 2, 3, 4]
     assert ctl._assign("source", "s2") == 2                 # a restarted process keeps its id
@@ -148,7 +143,7 @@ def run_live(tmp_path, *, config=None, sources=None, brokers=None, window=0.5, d
     meta = json.loads((run["output_dir"] / "run.json").read_text())
     return run, rows, meta, codes
 
-def test_live_5x3_matches_reference_and_keeps_traffic_flowing(tmp_path):
+def test_live_5x3(tmp_path):
     run, rows, meta, codes = run_live(tmp_path, config=str(PAPER))
     assert codes == [0] * 8                                  # every worker exited cleanly on stop
     topo = topology_from_config(yaml.safe_load(run["config_path"].read_text()))
@@ -179,7 +174,7 @@ def test_live_5x3_matches_reference_and_keeps_traffic_flowing(tmp_path):
     assert sorted(meta["processes"]["broker"].values()) == ["SN1", "SN2", "SN3"]
     assert meta["parameters"]["eta"] == 0.25 and meta["parameters"]["delta_s"] == 1e-8
 
-def test_live_generated_topology_is_not_hardcoded_to_5x3(tmp_path):
+def test_live_4x2(tmp_path):
     run, rows, meta, codes = run_live(tmp_path, sources=4, brokers=2, duration=4.0)
     assert (run["n"], run["m"]) == (4, 2) and codes == [0] * 6
     assert len(rows) >= 4 and np.array(rows[-1]["lambda_ij"]).shape == (4, 2)
@@ -203,7 +198,7 @@ def test_prepare_run_validation(tmp_path):
     env = launcher.compose_env({**run, "output_dir": ROOT / "runs" / "ci"}, 30)
     assert env["TE_CONFIG"] == "runs/ci/resolved_config.yaml" and env["TE_DURATION"] == "30"
 
-def test_dashboard_link_waits_for_the_dashboard():
+def test_dashboard_ready():
     import http.server
     class Health(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -220,7 +215,7 @@ def test_dashboard_link_waits_for_the_dashboard():
         server.shutdown()
     assert not launcher.dashboard_ready(free_port(), timeout=1.5)     # nothing listening
 
-def test_link_waits_for_this_runs_first_round(tmp_path):
+def test_first_round_written(tmp_path):
     metrics = tmp_path / "metrics.jsonl"
     metrics.write_text('{"iteration": 1}\n')                           # left over from an earlier run
     since = time.time() + 1.0
@@ -229,7 +224,7 @@ def test_link_waits_for_this_runs_first_round(tmp_path):
     metrics.write_text('{"iteration": 1}\n')                           # this run's first record
     assert launcher.first_round_written(metrics, since, timeout=2)
 
-def test_local_launch_refuses_ports_in_use(tmp_path, capsys):
+def test_ports_in_use(tmp_path, capsys):
     run = launcher.prepare_run(str(PAPER), output_dir=tmp_path / "out")
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
@@ -240,7 +235,7 @@ def test_local_launch_refuses_ports_in_use(tmp_path, capsys):
         assert launcher.run_local(run, port=free_port(), dashboard_port=port) == 2
     assert "already in use" in capsys.readouterr().out
 
-def test_docker_found_outside_a_stale_path(monkeypatch, tmp_path):
+def test_docker_outside_path(monkeypatch, tmp_path):
     # A terminal opened before Docker Desktop was installed: not on PATH, but in its install folder
     folder = tmp_path / "Programs" / "DockerDesktop" / "resources" / "bin"
     folder.mkdir(parents=True)
@@ -250,7 +245,7 @@ def test_docker_found_outside_a_stale_path(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert launcher.docker_executable() == str(exe)
 
-def test_compose_file_defines_replicable_services():
+def test_compose_file():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     services = compose["services"]
     for name in ("controller", "source", "broker", "dashboard"):

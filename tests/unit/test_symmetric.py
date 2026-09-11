@@ -1,12 +1,7 @@
 """
-Fully symmetric N x M instances against the closed form (docs/symmetric_case.md).
-
-Oracle checks (closed form, centralized solver, fixed point) cover every case.
-Algorithm 1 is checked with the reference notebook's conservative step sizes
-(eta=0.01, gamma=0.02, as in its load sweep): with the paper's 5x3 values
-(eta=0.25, gamma=0.5) it enters a period-2 cycle on the 5x3 symmetric case,
-which is asserted below as a documented counterexample. Proposition 1 does
-not claim convergence; these results are empirical.
+Symmetric N x M instances against the closed form (docs/symmetric_case.md).
+Algorithm 1 runs with eta=0.01, gamma=0.02; the paper's 5x3 values cycle, which is
+asserted as a counterexample.
 """
 import numpy as np
 import pytest
@@ -55,7 +50,7 @@ def test_centralized_solver_finds_equal_split(n, m, lam, mu_a, mu_s):
     assert info["objective"] == pytest.approx(s["objective"], rel=1e-10)
 
 @pytest.mark.parametrize("n, m, lam, mu_a, mu_s", CASES, ids=IDS)
-def test_equal_split_is_certified_best_response_fixed_point(n, m, lam, mu_a, mu_s):
+def test_equal_split_fixed_point(n, m, lam, mu_a, mu_s):
     s = symmetric_solution(n, m, lam, mu_a, mu_s)
     br = best_response_mm1(np.full(m, mu_a), np.full(m, s["price"]), lam)
     assert br == pytest.approx(np.full(m, lam / m), abs=1e-10)
@@ -65,7 +60,7 @@ def test_equal_split_is_certified_best_response_fixed_point(n, m, lam, mu_a, mu_
     assert d["M_ij"] == pytest.approx(np.full((n, m), s["alpha"]), rel=1e-12)   # identical on every route
 
 @pytest.mark.parametrize("n, m, lam, mu_a, mu_s", CASES, ids=IDS)
-def test_algorithm1_reaches_certified_equal_split(n, m, lam, mu_a, mu_s):
+def test_algorithm1_reaches_equal_split(n, m, lam, mu_a, mu_s):
     topo = symmetric_topology(n, m, lam, mu_a, mu_s)
     s = symmetric_solution(n, m, lam, mu_a, mu_s)
     state = run_algorithm1(topo, **CONSERVATIVE, tol=1e-10, max_iter=10000, require_certificate=True)
@@ -82,15 +77,8 @@ def test_algorithm1_from_unbalanced_start(n, m, lam, mu_a, mu_s):
                            initial_lambda=unbalanced_start(n, m, lam, mu_a, mu_s), require_certificate=True)
     assert state.lambda_ij == pytest.approx(symmetric_solution(n, m, lam, mu_a, mu_s)["lambda_ij"], abs=1e-7)
 
-def test_default_steps_enter_feasible_period_two_cycle_on_5x3():
-    """
-    Documented counterexample: with eta=0.25, gamma=0.5 the 5x3 symmetric
-    instance (rho_s = 0.75) does not converge from the LP initializer (equal
-    broker loads, unequal per-source splits). All sources react to the same
-    prices and overshoot together; the planned loads settle into a period-2
-    cycle between about (16.58, 15.56, 12.87) and (12.43, 16.00, 16.56). The
-    safe step never binds and every iterate stays feasible.
-    """
+def test_paper_steps_cycle_on_5x3():
+    """eta=0.25, gamma=0.5 on the symmetric 5x3: a feasible period-2 cycle, never certified."""
     case = CASES[2]
     topo = symmetric_topology(*case)
     state = algorithm1_initial_state(topo)
@@ -114,7 +102,7 @@ def test_default_steps_enter_feasible_period_two_cycle_on_5x3():
     (4, 2, 3.0, 10.0, 6.0, "mu_server"),       # N lam / M = 6 = mu_server
     (4, 2, 3.5, 10.0, 6.0, "mu_server"),       # beyond
 ])
-def test_infeasible_symmetric_instances_rejected(n, m, lam, mu_a, mu_s, which):
+def test_infeasible_rejected(n, m, lam, mu_a, mu_s, which):
     with pytest.raises(ValueError, match=which):
         symmetric_solution(n, m, lam, mu_a, mu_s)
     topo = symmetric_topology(n, m, lam, mu_a, mu_s)

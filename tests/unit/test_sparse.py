@@ -4,7 +4,7 @@ import pytest
 
 from src.controller.feasibility import random_feasible_routing, transportation_feasibility
 
-def test_notebook_sparse_feasibility_regression():
+def test_notebook_sparse_lp():
     # Reference notebook sparse_feasibility_regression(): both sources can only
     # reach SN1 (capacity 1) with total demand 2. Aggregate capacity (2) would
     # suggest feasibility; the masked LP must reject it.
@@ -53,7 +53,7 @@ MASK = np.array([[1, 1, 0], [0, 1, 1], [1, 1, 1]], dtype=bool)
 def sparse_topology():
     return topology_from_config(SPARSE_CONFIG)
 
-def test_unavailable_links_parse_to_a_route_mask():
+def test_unavailable_links_mask():
     t = sparse_topology()
     assert t.route_mask.tolist() == MASK.tolist()
     assert t.mu_links[0, 2] == 0.0 and t.mu_links[1, 0] == 0.0
@@ -76,7 +76,7 @@ def test_invalid_sparse_configs(change, match):
     with pytest.raises(ValueError, match=match):
         topology_from_config(cfg)
 
-def test_zero_capacity_still_needs_an_explicit_mask():
+def test_zero_capacity_needs_mask():
     with pytest.raises(ValueError, match="access capacities must be > 0"):
         Topology([1.0], [[1.0, 0.0]], [5.0, 5.0], ["A"], ["S1", "S2"])
     t = Topology([1.0], [[1.0, 3.0]], [5.0, 5.0], ["A"], ["S1", "S2"], route_mask=[[True, False]])
@@ -90,7 +90,7 @@ def test_sparse_marginal_costs_and_objective():
     assert np.isfinite(system_objective(L, t.mu_links, t.mu_brokers))
     assert system_objective(np.where(MASK, 1.0, 0.5), t.mu_links, t.mu_brokers) == np.inf   # flow on a missing link
 
-def test_algorithm1_and_central_agree_on_sparse_topology():
+def test_sparse_algorithm1_vs_central():
     t = sparse_topology()
     L_c, info = solve_central(t.lambdas_total, t.mu_links, t.mu_brokers)
     assert np.all(L_c[~MASK] == 0.0)
@@ -108,7 +108,7 @@ def test_algorithm1_and_central_agree_on_sparse_topology():
     assert "r_unavailable_routes" in compute_diagnostics(bad, state.prices, t)["failed"]
 
 @pytest.mark.parametrize("mode", ["capacity_safe_event_driven", "windowed_stochastic"])
-def test_event_modes_never_route_to_missing_links(mode):
+def test_no_flow_on_missing_links(mode):
     t = sparse_topology()
     ev = event_experiment(t, mode, duration=100.0, warmup_time=20.0, seed=0)
     assert ev["completed"] > 1000

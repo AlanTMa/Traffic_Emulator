@@ -1,7 +1,7 @@
 import json
 from src.telemetry.metrics import JsonlTail, TelemetryBuffer
 
-def test_history_is_bounded_but_file_is_complete(tmp_path):
+def test_bounded_history_full_file(tmp_path):
     path = tmp_path / "metrics.jsonl"
     buf = TelemetryBuffer(path=path, max_history=10)
     for k in range(100):
@@ -36,7 +36,7 @@ def test_tail_resets_on_new_run(tmp_path):
     rows = tail.read()
     assert [r["run"] for r in rows] == ["b", "b", "b"] and tail.total_rows == 3
 
-def test_tail_detects_new_run_that_outgrows_old_offset(tmp_path):
+def test_tail_new_run_past_old_offset(tmp_path):
     # Records of every run start with the same long prefix; only the first
     # record's wall_time tells runs apart. If the new run has already grown
     # past the old offset, a prefix check would resume mid-record.
@@ -50,7 +50,7 @@ def test_tail_detects_new_run_that_outgrows_old_offset(tmp_path):
     assert [r["wall_time"] for r in rows] == [200.0] * 6
     assert tail.total_rows == 6
 
-def test_tail_first_seen_mid_write_then_new_run(tmp_path):
+def test_tail_mid_write_then_new_run(tmp_path):
     # The reader first sees run A's first record half-written (only the
     # prefix shared by all runs), then A's complete records, then run B,
     # which has already outgrown A's offset. B must be read from its start.

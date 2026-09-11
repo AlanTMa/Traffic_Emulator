@@ -18,7 +18,7 @@ def rows(path):
             for line in (path / "metrics.jsonl").read_text().splitlines()]
 
 @pytest.mark.parametrize("controller", ["static_algorithm1", "capacity_safe_event_driven", "windowed_stochastic"])
-def test_generated_run_is_reproducible_from_its_config(monkeypatch, tmp_path, controller):
+def test_generated_run_reproducible(monkeypatch, tmp_path, controller):
     out = tmp_path / "gen"
     run_cli(monkeypatch, "--sources", "6", "--brokers", "3", "--load", "0.4", "--seed", "7",
             "--controller", controller, "--duration", "20", "--window", "2", "--no-realtime", "--output-dir", str(out))
@@ -33,7 +33,7 @@ def test_generated_run_is_reproducible_from_its_config(monkeypatch, tmp_path, co
     run_cli(monkeypatch, "--config", str(out / "generated_config.yaml"), "--no-realtime", "--output-dir", str(again))
     assert rows(out) == rows(again) and len(rows(out)) == 10
 
-def test_config_run_can_switch_controller_mode(monkeypatch, tmp_path):
+def test_config_mode_switch(monkeypatch, tmp_path):
     # The canonical 5x3 (written for windowed_stochastic, eta = split inertia 0.35) under static Algorithm 1
     out = tmp_path / "static"
     run_cli(monkeypatch, "--config", "config/paper_5x3.yaml", "--controller", "static_algorithm1",

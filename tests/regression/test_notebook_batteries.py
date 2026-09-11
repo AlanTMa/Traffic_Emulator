@@ -1,21 +1,8 @@
 """
-Port of the reference notebook's verification batteries
-(WiOpt26JNSC_Extended.ipynb cells 4, 6 and 8), with the notebook's own
-tolerances, run against this repository's implementation.
-
-- validate_source_best_response / randomized_best_response_regression:
-  closed-form best response vs an independent SLSQP optimizer
-- stressed_best_response_regression: high prices, near-capacity demand
-- finite-difference derivative regression
-- run_load_sweep: centralized vs Algorithm 1 at service loads 0.2/0.55/0.85
-  (capacities scaled proportionally), eta=0.01, gamma=0.02      [slow]
-- run_multistart_regression: 5 random feasible starts per load   [slow]
-(The sparse transportation-LP regression lives with the route-mask tests.)
-
-The load sweep and multistart run the notebook's controller, i.e. Algorithm 1
-with the notebook's safe-step bound (safe_step_variant="notebook"). With the
-paper's bound, multistart seed 0 at load 0.85 does not converge; that
-difference is asserted separately below.
+The notebook's verification batteries (cells 4, 6, 8) with its tolerances: best
+response against an SLSQP optimizer, stressed best responses, finite-difference
+derivatives, the load sweep and multistart (slow). The last two use the notebook's
+safe-step bound: with the paper's, multistart seed 0 at load 0.85 does not converge.
 """
 import numpy as np
 import pytest
@@ -181,14 +168,8 @@ def test_multistart_regression(target):
         assert_certificate(topo, state.lambda_ij, state.prices, info["objective"])
 
 @pytest.mark.slow
-def test_paper_safe_step_fails_multistart_seed0_at_high_load():
-    """
-    Documented difference between the paper's and the notebook's safe-step
-    bound. From random start seed 0 at load 0.85 the bound binds often;
-    the notebook variant converges (about 2,160 iterations), the paper
-    variant, which takes up to 1/eta larger steps when binding, has not
-    converged after 3,000 iterations (at 15,000 its gap is still ~0.57).
-    """
+def test_paper_safe_step_multistart_0_85():
+    """With the paper's bound, multistart seed 0 at load 0.85 stops short of the optimum."""
     topo = load_case(0.85)
     _, info = solve_central(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
     start = random_feasible_routing(topo.lambdas_total, topo.mu_links, topo.mu_brokers, seed=0)

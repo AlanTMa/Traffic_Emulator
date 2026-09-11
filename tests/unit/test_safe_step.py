@@ -6,7 +6,7 @@ from src.model.marginal_costs import mm1_marginal_cost_vectorized
 from src.model.topology import Topology
 from src.simulation.state import SystemState
 
-def test_non_binding_example_from_paper_formula():
+def test_non_binding_example():
     # eta=0.25, headroom/Delta=0.5: s_j = min(1, 0.5/0.25) = 1, so the full
     # eta step is taken (the old headroom/Delta form gave s=0.5).
     lam = np.array([[0.0]])
@@ -26,7 +26,7 @@ def test_binding_single_broker():
     assert s == pytest.approx(0.4)
     assert loads[0] + 0.25 * s * 1.0 == pytest.approx(mu[0] - 1e-8)
 
-def test_min_over_brokers_ignores_decreasing_loads():
+def test_min_ignores_decreasing_loads():
     lam = np.array([[1.0, 1.0, 2.0]])
     br = np.array([[2.0, 1.5, 0.5]])            # Delta = [+1, +0.5, -1.5]
     loads = lam.sum(axis=0)
@@ -49,7 +49,7 @@ def _binding_instance():
     prices0 = np.array([0.0, 1e3])
     return topo, lam0, prices0
 
-def test_iteration_step_binding_matches_algorithm_1():
+def test_iteration_step_binding():
     topo, lam0, prices0 = _binding_instance()
     eta, gamma, eps, delta_s = 0.25, 0.01, 1e-12, 1e-6
     state = SystemState(lambda_ij=lam0.copy(), prices=prices0.copy())
@@ -77,7 +77,7 @@ def test_iteration_step_binding_matches_algorithm_1():
     assert state.lambda_ij.sum(axis=1) == pytest.approx(topo.lambdas_total, abs=1e-9)
     assert np.all(state.lambda_ij >= 0)
 
-def test_binding_step_stays_feasible_over_iterations():
+def test_binding_step_stays_feasible():
     topo, lam0, prices0 = _binding_instance()
     state = SystemState(lambda_ij=lam0.copy(), prices=prices0.copy())
     for _ in range(200):
@@ -87,7 +87,7 @@ def test_binding_step_stays_feasible_over_iterations():
         assert np.all(state.lambda_ij < topo.mu_links)
         assert state.lambda_ij.sum(axis=1) == pytest.approx(topo.lambdas_total, abs=1e-9)
 
-def test_best_response_failure_raises_by_default_and_is_recorded_when_held(monkeypatch):
+def test_best_response_failure_hold(monkeypatch):
     import src.controller.synchronous as sync
     topo, lam0, prices0 = _binding_instance()
     real = sync.best_response_available

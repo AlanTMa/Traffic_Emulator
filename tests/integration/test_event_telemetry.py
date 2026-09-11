@@ -7,7 +7,7 @@ from src.simulation.handler import SimulationHandler
 from src.simulation.queues import SimulationState
 from src.telemetry.metrics import TelemetryBuffer
 
-def test_windowed_records_queue_and_latency_metrics():
+def test_windowed_queue_metrics():
     topo = Topology(np.array([30.0, 10.0]), np.full((2, 2), 60.0), np.array([80.0, 60.0]), ["A", "B"], ["S1", "S2"])
     engine = SimulationEngine()
     state = SimulationState(2, 2, topo.mu_links, topo.mu_brokers, keep_requests=False)

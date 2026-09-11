@@ -1,11 +1,4 @@
-"""
-Windowed stochastic controller (controller_mode: windowed_stochastic).
-
-All sources update once per global controller window from measured-rate
-prices. This is not an asynchronous controller: there are no independent
-per-broker price updates, delayed or stale price messages, or per-source
-update clocks.
-"""
+"""windowed_stochastic: the notebook's windowed controller."""
 import numpy as np
 import pytest
 from src.simulation.engine import SimulationEngine
@@ -14,7 +7,7 @@ from src.simulation.queues import SimulationState
 from src.simulation.handler import SimulationHandler
 from src.model.topology import Topology
 
-def test_windowed_controller_balances_symmetric_brokers():
+def test_windowed_balances_symmetric_brokers():
     # 2 sources, 2 identical brokers. Rates are high enough (~200 work units per
     # broker per window) for the measured-rate prices to be informative.
     sources = ["P0", "P1"]
