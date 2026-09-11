@@ -1,11 +1,6 @@
 """
-Closed-form solution of the fully symmetric N x M instance (correctness oracle).
-
-N identical sources with rate lam, M identical brokers with service rate
-mu_server, every access link with rate mu_access. See docs/symmetric_case.md
-for the derivation: if lam/M < mu_access and N*lam/M < mu_server, the equal
-split lambda_ij = lam/M is the unique system optimum and a feasible fixed
-point of Algorithm 1 (price-consistent, every source best-responding).
+Closed-form optimum of the symmetric N x M instance (docs/symmetric_case.md):
+the equal split lambda_ij = lam/M, when lam/M < mu_access and N lam/M < mu_server.
 """
 import numpy as np
 from src.model.topology import Topology
@@ -16,12 +11,7 @@ def symmetric_topology(n_sources: int, n_brokers: int, lam: float, mu_access: fl
                     [f"P{i}" for i in range(n_sources)], [f"SN{j + 1}" for j in range(n_brokers)])
 
 def symmetric_solution(n_sources: int, n_brokers: int, lam: float, mu_access: float, mu_server: float) -> dict:
-    """
-    Equal-split optimum of the symmetric instance.
-
-    Raises:
-        ValueError: if lam/M >= mu_access or N*lam/M >= mu_server (no feasible routing).
-    """
+    """Equal-split optimum; ValueError when infeasible."""
     x = lam / n_brokers                       # per-route flow lambda_ij
     load = n_sources * lam / n_brokers        # broker load Lambda_j
     if not x < mu_access:

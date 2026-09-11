@@ -1,14 +1,8 @@
 """
-Run settings of the distributed backend.
-
-The distributed backend runs Algorithm 1 on planned rates over live queues,
-i.e. controller_mode capacity_safe_event_driven, with execution_backend
-distributed. Its parameters come from the config's `algorithm` section when
-that config is written for an Algorithm 1 mode; a config written for the
-windowed stochastic scheme (e.g. config/paper_5x3.yaml, whose eta = 0.35 is
-the windowed split inertia) contributes only its topology, window and seed,
-and Algorithm 1 uses the paper's Sec. V-A values (eta 0.25, gamma 0.5,
-delta_s 1e-8). Every substitution is reported and recorded.
+Parameters of a distributed run. A config written for the windowed scheme
+(paper_5x3.yaml: its eta is the split inertia) contributes topology, window
+and seed only; Algorithm 1 then uses the paper's eta 0.25, gamma 0.5,
+delta_s 1e-8, and the substitution is recorded in `notes`.
 """
 from src.controller.synchronous import SAFE_STEP_VARIANTS
 from src.model.config import controller_mode
@@ -29,11 +23,10 @@ def distributed_settings(config: dict, overrides: dict = None) -> dict:
         params = {k: float(alg.get(k, v)) for k, v in ALGORITHM1_DEFAULTS.items()}
     else:
         params = dict(ALGORITHM1_DEFAULTS)
-        notes.append(f"config controller_mode is {mode}; its algorithm parameters describe that scheme, so "
-                     f"Algorithm 1 uses the paper defaults eta={params['eta']}, gamma={params['gamma']}, "
+        notes.append(f"config is {mode}; Algorithm 1 uses eta={params['eta']}, gamma={params['gamma']}, "
                      f"delta_s={params['delta_s']}")
-    params["beta"] = float(alg.get("beta", 0.3))              # EWMA of measured rates: telemetry only
-    params["window"] = float(sim.get("window", 5.0))          # seconds between controller rounds
+    params["beta"] = float(alg.get("beta", 0.3))
+    params["window"] = float(sim.get("window", 5.0))
     params["safe_step_variant"] = str(alg.get("safe_step_variant", "paper"))
     for key, value in (overrides or {}).items():
         if value is not None:

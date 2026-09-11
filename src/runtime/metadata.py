@@ -1,6 +1,4 @@
-"""
-Run metadata written next to the telemetry (run.json) for reproducibility.
-"""
+"""run.json."""
 import json
 import os
 import platform
@@ -54,7 +52,7 @@ def write_run_metadata(output_dir: Path, config: dict, topology, *, seed: int, c
         "mu_links": topology.mu_links.tolist(),
         "mu_brokers": topology.mu_brokers.tolist(),
         "units": "normalized work units/s (5x3 instance: 1 unit = 1 MB)",
-        "parameters": parameters,   # eta, gamma, beta, delta_s, eps, window, warmup as used
+        "parameters": parameters,
         "config": config,
         "versions": {"python": sys.version.split()[0], "numpy": np.__version__, "platform": platform.platform()},
         "execution_backend": "in_process",

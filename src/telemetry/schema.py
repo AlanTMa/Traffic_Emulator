@@ -1,14 +1,7 @@
 """
-Telemetry record schema: one JSON object per controller iteration/window.
-
-Matrices are nested lists indexed [source][broker]; vectors are per source
-(_i) or per broker (_j). Model quantities (D, C, objective, residuals) are
-evaluated on the controller's routing lambda_ij with the M/M/1 formulas; in
-windowed_stochastic mode that routing is the *planned* split, and measured
-quantities are recorded alongside under their own keys.
-
-Units: rates are normalized work units/s (see src/model/topology.py); the
-latency_* fields are end-to-end sojourn times of one work unit in seconds.
+One telemetry record per iteration/window. Matrices are [source][broker]
+lists; _i and _j are per source and per broker. Model quantities are
+evaluated on the planned routing; measured quantities have their own keys.
 """
 import time
 import numpy as np
@@ -28,16 +21,12 @@ def controller_snapshot(topology, lambda_ij: np.ndarray, prices: np.ndarray, *, 
                         controller_mode: str, s_j: np.ndarray = None, s_t: float = np.nan,
                         route_rel: float = np.nan, price_rel: float = np.nan, eps: float = 1e-12,
                         **extra) -> dict:
-    """
-    Build a telemetry record for a controller state (lambda_ij, published prices).
-
-    extra: mode-specific fields (e.g. measured rates, queue lengths), stored as is.
-    """
+    """Record for a controller state; `extra` holds the mode-specific fields."""
     lambda_ij = np.asarray(lambda_ij, dtype=float)
     lambdas = topology.lambdas_total
     diag = compute_diagnostics(lambda_ij, prices, topology, eps=eps)
     D_ij, D_j = diag["D_ij"], diag["D_j"]
-    # Model mean end-to-end delay per source: sum_j lambda_ij (D_ij + D_j) / lambda_i
+    # per-source mean delay
     e2e_i = (lambda_ij * (D_ij + D_j[None, :])).sum(axis=1) / np.maximum(lambdas, eps)
 
     record = {
@@ -46,24 +35,24 @@ def controller_snapshot(topology, lambda_ij: np.ndarray, prices: np.ndarray, *, 
         "iteration": iteration,
         "sim_time": sim_time,
         "wall_time": time.time(),
-        # Routing and loads
+        # routing
         "lambda_ij": lambda_ij,
         "fraction_ij": lambda_ij / np.maximum(lambdas, eps)[:, None],
         "load_j": diag["broker_loads"],
         "util_j": diag["broker_utilization"],
         "access_util_ij": np.divide(lambda_ij, topology.mu_links, out=np.full(lambda_ij.shape, np.nan),
                                     where=topology.mu_links > 0),     # NaN where no link
-        # Prices and multipliers
+        # prices
         "price_j": np.asarray(prices, dtype=float),
         "alpha_i": diag["alpha_i"],
-        # Delays and marginal costs
+        # delays and marginal costs
         "D_ij": D_ij, "D_j": D_j, "e2e_i": e2e_i,
         "C_ij": diag["C_ij"], "C_j": diag["C_j"], "M_ij": diag["M_ij"],
         "active_ij": diag["active_ij"],
         "objective": system_objective(lambda_ij, topology.mu_links, topology.mu_brokers),
-        # Algorithm 1 step (NaN/None where the controller has no safe step)
+        # safe step (NaN without one)
         "s_j": s_j, "s_t": s_t,
-        # Residuals
+        # residuals
         "route_rel": route_rel, "price_rel": price_rel,
         "r_conservation": diag["r_conservation"],
         "r_capacity": max(diag["r_access_capacity"], diag["r_service_capacity"]),

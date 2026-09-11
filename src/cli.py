@@ -1,6 +1,4 @@
-"""
-Command-line interface for the traffic allocation emulator.
-"""
+"""Command line: `run` (one process) and `up` (the distributed emulator)."""
 import argparse
 import copy
 import itertools
@@ -24,30 +22,24 @@ from src.telemetry.schema import controller_snapshot
 from src.controller.synchronous import algorithm1_initial_state, iteration_step
 from src.runtime.metadata import resolve_seed, write_run_metadata
 
-# Global flag for graceful shutdown
 RUNNING = True
 
 def signal_handler(sig, frame):
     global RUNNING
-    print("\n[SIGINT] Shutdown signal received. Stopping simulation...")
+    print("\nstopping")
     RUNNING = False
 
 def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "runs/latest"):
     global RUNNING
     signal.signal(signal.SIGINT, signal_handler)
 
-    # 1. Load configuration
     config = load_config(config_path)
     topo = topology_from_config(config)
-    # float(): PyYAML reads values like 1e-8 (no decimal point) as strings
-    alg_cfg = config.get('algorithm', {})
+    alg_cfg = config.get('algorithm', {})       # float() below: PyYAML reads 1e-8 as a string
     sim_cfg = config.get('simulation', {})
     window = float(sim_cfg.get('window', 5.0))
-    # No duration: run until stopped (Ctrl+C, or Stop in the dashboard)
     duration = float(sim_cfg.get('duration', 'inf'))
 
-    # Optional time-varying capacities (dynamics.capacity_variation); topo is
-    # then the topology in effect at t = 0
     mode = controller_mode(config)
     seed = resolve_seed(config)
     base_topo = topo
@@ -56,7 +48,6 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
         topo = capacity_model.topology_at(0.0)
         print(f"Time-varying capacities: link {capacity_model.link}, broker {capacity_model.broker}")
 
-    # 2. Initialization
     x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers)
     output_dir = Path(output_dir)
     telemetry = TelemetryBuffer(path=output_dir / "metrics.jsonl")
@@ -64,34 +55,31 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
 
     if mode in ('static_algorithm1', 'capacity_safe_event_driven'):
         params = {"eta": float(alg_cfg.get('eta', 0.25)), "gamma": float(alg_cfg.get('gamma', 0.5)),
-                  "delta_s": float(alg_cfg.get('delta_s', 1e-8)),   # Algorithm 1 capacity margin
-                  "eps": float(alg_cfg.get('eps', 1e-12)),          # numerical guard only
+                  "delta_s": float(alg_cfg.get('delta_s', 1e-8)), "eps": float(alg_cfg.get('eps', 1e-12)),
                   "window": window}
         if mode == 'capacity_safe_event_driven':
-            params["beta"] = float(alg_cfg.get('beta', 0.3))       # measured-rate telemetry only
+            params["beta"] = float(alg_cfg.get('beta', 0.3))
     else:
         params = {"eta": float(alg_cfg.get('eta', 0.35)), "gamma": float(alg_cfg.get('gamma', 0.5)),
-                  "beta": float(alg_cfg.get('beta', 0.3)), "delta_s": None,   # no safe step in this mode
+                  "beta": float(alg_cfg.get('beta', 0.3)), "delta_s": None,   # no safe step
                   "window": window, "warmup": int(sim_cfg.get('warmup', 4))}
     write_run_metadata(output_dir, config, base_topo, seed=seed, controller_mode=mode, real_time=real_time,
                        parameters=params, config_path=config_path)
     print(f"Topology: {topo.n_sources} sources, {topo.n_brokers} brokers; controller: {mode}; seed: {seed}")
     if np.isinf(duration):
-        print(f"Running until stopped, controller every {window}s. Press Ctrl+C to stop.", flush=True)
+        print(f"running until Ctrl+C, one window every {window}s", flush=True)
     else:
-        print(f"Duration: {duration}s, controller every {window}s (~{round(duration / window)} iterations). Press Ctrl+C to stop.", flush=True)
+        print(f"{duration}s, one window every {window}s ({round(duration / window)} iterations)", flush=True)
 
     if mode == 'static_algorithm1':
         run_static(topo, params, duration, telemetry, real_time, capacity_model)
         telemetry.close()
         return
 
-    # Create the event-driven simulation components
     engine = SimulationEngine()
     state = SimulationState(len(topo.sources), len(topo.brokers), topo.mu_links, topo.mu_brokers,
                             keep_requests=False)
     if mode == 'capacity_safe_event_driven':
-        # Algorithm 1 on planned rates; initial routing from the LP with margin delta_s
         x_ij = transportation_feasibility(topo.lambdas_total, topo.mu_links, topo.mu_brokers,
                                           margin=params["delta_s"])
         handler = SimulationHandler(
@@ -108,13 +96,9 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
             rng=np.random.default_rng(seed), capacity_model=capacity_model,
         )
 
-    # Initial events: first arrivals for all sources
     for i in range(len(topo.sources)):
         engine.schedule(Event(timestamp=0.0, event_type=EventType.SOURCE_ARRIVAL, source_id=i))
 
-    print(f"Starting event-driven simulation from config: {config_path}")
-
-    # 4. Execution
     def wrapper(event):
         if not RUNNING:
             engine.stop()
@@ -122,29 +106,20 @@ def run_simulation(config_path: str, real_time: bool = True, output_dir: str = "
         handler.handle_event(event)
 
     try:
-        # real_time paces simulated time to the wall clock so the live
-        # dashboard updates as the run progresses.
         engine.run(duration=duration, handler=wrapper, real_time=real_time)
     except KeyboardInterrupt:
         pass
     telemetry.close()
 
-    # 5. Final Results
-    print("\n=== Simulation Complete ===")
     if state.completed:
-        print(f"Completed {state.completed} work units.")
-        print(f"Mean end-to-end work-unit sojourn time: {state.latency_sum / state.completed:.4f}s")
+        print(f"\n{state.completed} work units, mean sojourn {state.latency_sum / state.completed:.4f}s")
     else:
-        print("No work units completed during the simulation.")
+        print("\nno work units completed")
 
 def run_static(topo, params, duration, telemetry, real_time, capacity_model=None):
-    """
-    static_algorithm1: paper Algorithm 1 on the analytic model (no events or queues),
-    one iteration per window. Reproduces the notebook's static convergence plots.
-    """
+    """Algorithm 1 on the analytic model, one iteration per window."""
     eta, gamma, eps, delta_s, window = (params[k] for k in ("eta", "gamma", "eps", "delta_s", "window"))
 
-    # Algorithm 1 initialization: LP routing with Lambda_j <= mu_j - delta_s, model prices
     state = algorithm1_initial_state(topo, delta_s, eps)
     wall_start = time.perf_counter()
     n_iter = None if np.isinf(duration) else round(duration / window)
@@ -157,7 +132,7 @@ def run_static(topo, params, duration, telemetry, real_time, capacity_model=None
             time.sleep(max(0.0, wall_start + k * window - time.perf_counter()))
 
         if capacity_model is not None:
-            topo = capacity_model.topology_at(k * window)   # capacities for this iteration
+            topo = capacity_model.topology_at(k * window)
         state, _, residual = iteration_step(state, topo, eta, gamma, eps=eps, delta_s=delta_s,
                                             on_best_response_failure="hold" if capacity_model else "raise")
         extra = ({"mu_links_t": topo.mu_links, "mu_brokers_t": topo.mu_brokers,
@@ -168,16 +143,11 @@ def run_static(topo, params, duration, telemetry, real_time, capacity_model=None
             route_rel=state.route_rel, price_rel=state.price_rel, eps=eps, **extra)
         telemetry.record(record)
 
-    print("\n=== Static Solve Complete ===")
-    print(f"Iterations: {state.iteration}, objective: {record['objective']:.10f}, final residual: {residual:.2e}")
+    print(f"\n{state.iteration} iterations, F = {record['objective']:.10f}, residual {residual:.2e}")
     print(record["certificate_status"])
 
 def configure(config: dict, args) -> dict:
-    """
-    A copy of the config with the run flags applied: --controller (another mode
-    resets the algorithm parameters, see with_controller_mode), --window,
-    --duration, --warmup, --seed and --eta/--gamma/--beta/--delta-s.
-    """
+    """Apply the run flags (--controller, --window, --duration, --warmup, --seed, --eta ...) to a copy."""
     config = with_controller_mode(config, args.controller) if args.controller else copy.deepcopy(config)
     mode = controller_mode(config)
     algorithm = config.get("algorithm") or {}
@@ -197,11 +167,7 @@ def configure(config: dict, args) -> dict:
     return config
 
 def generated_config(args) -> dict:
-    """
-    Config for a generated N x M topology (src/model/generate.py). The same
-    seed drives topology generation and the event simulation's RNG, so the
-    written config reproduces the run.
-    """
+    """Config for a generated N x M topology; the seed drives both the topology and the run."""
     mode = args.controller or "windowed_stochastic"
     seed = 42 if args.seed is None else args.seed
     simulation = {"controller_mode": mode, "window": 5.0, "seed": seed}
@@ -212,64 +178,54 @@ def generated_config(args) -> dict:
     return configure(config, args)
 
 def main():
-    parser = argparse.ArgumentParser(description="Traffic Allocation Emulator")
+    parser = argparse.ArgumentParser(description="Traffic emulator")
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser(
-        "run", help="Run a simulation",
-        description="Run a config (--config), or generate an N x M topology (--sources/--brokers/...). The "
-                    "controller flags apply to both. The config actually run is written to <output-dir> "
-                    "(generated_config.yaml, or resolved_config.yaml when flags change a config).")
+        "run", help="run in one process",
+        description="Run a config, or generate an N x M topology. The config actually run is written "
+                    "to the output directory.")
     source = run_parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--config", type=str, help="Path to YAML config file")
-    source.add_argument("--sources", type=int, help="Generate a topology with this many sources")
-    run_parser.add_argument("--brokers", type=int, help="Brokers in the generated topology")
-    run_parser.add_argument("--load", type=float, default=0.3,
-                            help="Generated: total offered rate / total broker capacity (default 0.3)")
-    run_parser.add_argument("--seed", type=int,
-                            help="Seed of the simulation (generated: also of the topology; default 42)")
-    run_parser.add_argument("--controller", choices=CONTROLLER_MODES,
-                            help="Controller mode (default: the config's; windowed_stochastic when generated). "
-                                 "A different mode than the config's uses that mode's default parameters")
-    run_parser.add_argument("--window", type=float, help="Seconds per window (default: the config's; 5)")
-    run_parser.add_argument("--duration", type=float, help="Simulated seconds (default: the config's; until stopped)")
-    run_parser.add_argument("--warmup", type=int, help="windowed_stochastic: warm-up windows (default 4)")
+    source.add_argument("--config", type=str, help="YAML config")
+    source.add_argument("--sources", type=int, help="generate a topology with this many sources")
+    run_parser.add_argument("--brokers", type=int, help="brokers in the generated topology")
+    run_parser.add_argument("--load", type=float, default=0.3, help="generated: offered rate / broker capacity (0.3)")
+    run_parser.add_argument("--seed", type=int, help="run seed, and the topology's when generated (42)")
+    run_parser.add_argument("--controller", choices=CONTROLLER_MODES, help="controller mode (default: the config's)")
+    run_parser.add_argument("--window", type=float, help="seconds per window (5)")
+    run_parser.add_argument("--duration", type=float, help="simulated seconds (until stopped)")
+    run_parser.add_argument("--warmup", type=int, help="warm-up windows, windowed_stochastic (4)")
     for name in ("eta", "gamma", "beta", "delta-s"):
-        run_parser.add_argument(f"--{name}", type=float, help=f"Override {name} (mode defaults otherwise)")
-    run_parser.add_argument("--no-realtime", action="store_true",
-                            help="Run as fast as possible instead of pacing to the wall clock")
-    run_parser.add_argument("--output-dir", default="runs/latest",
-                            help="Directory for metrics.jsonl (default: runs/latest)")
+        run_parser.add_argument(f"--{name}", type=float, help=f"override {name}")
+    run_parser.add_argument("--no-realtime", action="store_true", help="don't pace to the wall clock")
+    run_parser.add_argument("--output-dir", default="runs/latest", help="(runs/latest)")
 
     up_parser = subparsers.add_parser(
-        "up", help="Start the distributed emulator (controller, sources, brokers, dashboard)",
-        description="One command for the distributed emulator: one controller process, one process per source "
-                    "and per broker, and the dashboard. Algorithm 1 (paper) drives the routing of live traffic "
-                    "over explicit access and broker queues. Runs until Ctrl+C.")
-    up_parser.add_argument("--config", help="config whose topology is used (default config/paper_5x3.yaml "
-                                            "unless --sources/--brokers generate one)")
-    up_parser.add_argument("--sources", type=int, help="number of source processes (must match --config, "
-                                                       "or generates an N x M topology)")
-    up_parser.add_argument("--brokers", type=int, help="number of broker processes")
-    up_parser.add_argument("--load", type=float, default=0.3, help="generated topology: offered/broker capacity")
-    up_parser.add_argument("--seed", type=int, default=42, help="generated topology and root RNG seed")
+        "up", help="start the distributed emulator",
+        description="One controller, one process per source and per broker, and the dashboard, as "
+                    "containers or local processes. Runs until Ctrl+C.")
+    up_parser.add_argument("--config", help="topology config (config/paper_5x3.yaml, unless --sources/--brokers "
+                                            "generate one)")
+    up_parser.add_argument("--sources", type=int, help="source processes (must match --config)")
+    up_parser.add_argument("--brokers", type=int, help="broker processes")
+    up_parser.add_argument("--load", type=float, default=0.3, help="generated: offered rate / broker capacity (0.3)")
+    up_parser.add_argument("--seed", type=int, default=42, help="root seed (42)")
     up_parser.add_argument("--backend", choices=["docker", "local"], default="docker",
-                           help="docker: Docker Compose, one container per process (default); "
-                                "local: the same processes on this machine")
-    up_parser.add_argument("--window", type=float, help="seconds between controller rounds (config default 5)")
+                           help="docker (default) or local processes")
+    up_parser.add_argument("--window", type=float, help="seconds between rounds (5)")
     for name in ("eta", "gamma", "delta-s"):
-        up_parser.add_argument(f"--{name}", type=float, help=f"override Algorithm 1 {name}")
-    up_parser.add_argument("--output-dir", default="runs/distributed", help="telemetry and run metadata")
+        up_parser.add_argument(f"--{name}", type=float, help=f"override {name}")
+    up_parser.add_argument("--output-dir", default="runs/distributed", help="(runs/distributed)")
     up_parser.add_argument("--no-dashboard", action="store_true")
-    up_parser.add_argument("--port", type=int, default=7000, help="local backend: controller port")
-    up_parser.add_argument("--dashboard-port", type=int, default=8501, help="dashboard port on this machine")
-    up_parser.add_argument("--duration", type=float, help="stop after this many seconds (default: run until Ctrl+C)")
+    up_parser.add_argument("--port", type=int, default=7000, help="controller port, local backend (7000)")
+    up_parser.add_argument("--dashboard-port", type=int, default=8501, help="(8501)")
+    up_parser.add_argument("--duration", type=float, help="stop after this many seconds (until Ctrl+C)")
 
     args = parser.parse_args()
 
     if args.command == "up":
         from src.distributed import launcher
-        sys.stdout.reconfigure(line_buffering=True)          # keep our lines in order with docker's output
+        sys.stdout.reconfigure(line_buffering=True)          # stay in order with docker's output
         config = args.config or (None if args.sources is not None or args.brokers is not None
                                  else "config/paper_5x3.yaml")
         try:
@@ -295,8 +251,8 @@ def main():
                 if config != base:
                     written = "resolved_config.yaml"
                     if controller_mode(config) != controller_mode(base):
-                        print(f"Controller {controller_mode(config)} (the config is written for "
-                              f"{controller_mode(base)}); algorithm parameters {config['algorithm']}")
+                        print(f"controller {controller_mode(config)}, config is for {controller_mode(base)}; "
+                              f"parameters {config['algorithm']}")
         except ValueError as e:
             parser.error(str(e))
         if written:
@@ -305,9 +261,8 @@ def main():
             config_path = out / written
             config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
             if args.sources is not None:
-                print(f"Generated {args.sources}x{args.brokers} topology at load {args.load:.0%} "
-                      f"(seed {config['simulation']['seed']})")
-            print(f"Config written to {config_path}")
+                print(f"generated {args.sources}x{args.brokers} at load {args.load:.0%}, seed {config['simulation']['seed']}")
+            print(f"config: {config_path}")
         run_simulation(str(config_path), real_time=not args.no_realtime, output_dir=args.output_dir)
     else:
         parser.print_help()

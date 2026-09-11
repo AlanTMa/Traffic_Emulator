@@ -1,38 +1,24 @@
 """
-Time-varying access and broker capacities (reference notebook, cell 1).
-
-Port of the notebook's vary_link_capacity / vary_broker_capacity:
+The notebook's time-varying capacities (cell 1):
 
     mu_ij(t) = base_ij * max(0.2, 1 + a_l sin(2 pi t / T_l + phi_ij) + N(0, s_l))
     mu_j(t)  = base_j  * max(0.3, 1 + a_b cos(2 pi t / T_b + phi_j)  + N(0, s_b))
 
-with per-link/per-broker phases phi drawn uniformly from [0, 2 pi) when
-phase offsets are on (the notebook's USE_PHASE_OFFSETS). The notebook
-freezes capacities in all of its experiments (FREEZE_CAPS = True); here the
-variation is optional (config section `dynamics`).
-
-In the simulator capacities are piecewise constant over controller windows:
-they are evaluated at every window boundary t = k * window and used for
-service times, controller decisions and diagnostics until the next boundary.
-
-Config:
-    dynamics:
-      capacity_variation:
-        combo: 3                         # one of the notebook's 11 cases, or:
-        link:   {amp: 0.15, period: 60, noise: 0.02}
-        broker: {amp: 0.25, period: 120, noise: 0.03}
-        phase_offsets: true
+Phases are uniform on [0, 2 pi) with phase_offsets on. The notebook freezes
+capacities in its experiments; here they are optional (config
+dynamics.capacity_variation: a `combo`, or link/broker {amp, period, noise})
+and piecewise constant per window.
 """
 from dataclasses import dataclass
 
 import numpy as np
 
-# Notebook defaults (LINK_AMP, LINK_PERIOD, LINK_NOISE, BROKER_AMP, ...)
+# notebook defaults
 DEFAULT_LINK = {"amp": 0.15, "period": 60.0, "noise": 0.02}
 DEFAULT_BROKER = {"amp": 0.25, "period": 120.0, "noise": 0.03}
 LINK_FLOOR, BROKER_FLOOR = 0.2, 0.3
 
-# Notebook "combos": (link amp, period, noise, broker amp, period, noise)
+# the notebook's combos: (link amp, period, noise, broker amp, period, noise)
 NOTEBOOK_COMBOS = {
     1: (0.10, 120, 0.02, 0.10, 180, 0.03),   # mild, slow
     2: (0.20, 80, 0.03, 0.25, 120, 0.04),    # moderate
@@ -87,8 +73,7 @@ class CapacityVariation:
             if params["period"] <= 0 or params["amp"] < 0 or params["noise"] < 0:
                 raise ValueError(f"dynamics.capacity_variation.{name}: need period > 0, amp >= 0, noise >= 0")
             (link if name == "link" else broker).update(params)
-        # Own stream, derived from the run seed: capacity noise does not
-        # perturb the traffic random numbers and vice versa
+        # own stream, so capacity noise doesn't touch the traffic draws
         rng = np.random.default_rng([int(seed), 0xCA9])
         n, m = topology.mu_links.shape
         offsets = spec.get("phase_offsets", True)

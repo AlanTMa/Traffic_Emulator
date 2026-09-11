@@ -1,18 +1,9 @@
 """
-Broker worker process (distributed backend).
+Broker process: one broker's FIFO queue served at Exp(mu_j) on a virtual
+clock (a late wake-up delays the hand-off, never the server), latency
+accounting, and its damped price (synchronous.broker_price). mu_j is a model
+parameter, not the container's CPU.
 
-Owns one broker j: its service rate mu_j, its queue of incoming work units,
-their exponential service, completion/latency accounting, and its published
-congestion price, updated each controller round with the shared Algorithm 1
-formula (synchronous.broker_price).
-
-Service is paced on a virtual clock tied to the wall clock: a unit starts
-service at max(its arrival, the server's free time) and completes Exp(mu_j)
-later; the worker sleeps until that completion time. Late wake-ups therefore
-never slow the server down, so the queue is an M/M/1 queue in wall time.
-mu_j is this model parameter - not the container's CPU speed.
-
-Run directly (normally started by the launcher or Docker Compose):
     python -m src.distributed.broker --controller HOST:PORT [--port 0]
 """
 import argparse
@@ -29,7 +20,7 @@ from src.distributed.protocol import (LINE_LIMIT, Channel, advertised_host, conn
                                       parse_address, PROTOCOL_VERSION)
 from src.distributed.runtime import install_stop_handlers, log
 
-MAX_SAMPLES = 5000   # latency samples reported per round (uniformly thinned beyond this)
+MAX_SAMPLES = 5000   # latency samples per round; thinned beyond this
 
 class BrokerWorker:
     def __init__(self, controller: str, instance: str, port: int = 0, bind: str = "0.0.0.0"):
@@ -132,9 +123,8 @@ class BrokerWorker:
                 if message is None or message.get("type") == "stop":
                     break
                 if message.get("type") == "price":
-                    # Algorithm 1 Step 1 at this broker: damped price at the planned load. The
-                    # controller sends the current published price with the request, so a
-                    # skipped round cannot leave broker and controller disagreeing.
+                    # the request carries the current price, so a skipped round can't leave
+                    # broker and controller disagreeing
                     self.price = broker_price(message["price"], message["load"], self.mu, self.gamma, self.eps)
                     await control.send({"type": "price", "req": message["req"], "price": self.price,
                                         "metrics": self.metrics()})

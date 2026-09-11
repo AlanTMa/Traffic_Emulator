@@ -1,19 +1,12 @@
-"""
-Feasibility and initialization tools for routing.
-"""
+"""Initial routings: the max-headroom transportation LP and the notebook's random feasible routing."""
 import numpy as np
 from scipy.optimize import linprog
 
 def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8, route_mask=None):
     """
-    Return an LP-certified feasible routing matrix: the routing that
-    maximizes the minimum headroom over all access links and brokers.
-
-    route_mask: (N, M) bool, True where the access link exists (reference
-    notebook's route_mask). Defaults to mu_links > 0, which is all True for a
-    fully connected topology; flow on unavailable routes is fixed at 0, so the
-    certificate stays valid for sparse bipartite graphs where aggregate
-    capacity checks are not enough.
+    The routing that maximizes the minimum headroom over links and brokers (LP).
+    route_mask: True where a link exists (default mu_links > 0); missing links
+    carry no flow.
     """
     lambdas_total = np.asarray(lambdas_total, dtype=float)
     mu_links = np.asarray(mu_links, dtype=float)
@@ -28,14 +21,12 @@ def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8,
     for i in range(m):
         a_eq[i, i * n : (i + 1) * n] = 1.0
 
-    # Inequality constraints:
-    # 1. sum_i lambda_ij <= mu_j
-    # 2. lambda_ij <= mu_ij
+    # sum_i lambda_ij + h <= mu_j and lambda_ij + h <= mu_ij, h = headroom
     ub_rows, ub_rhs = [], []
     for j in range(n):
         row = np.zeros(m * n + 1)
         row[j : m * n : n] = 1.0
-        row[-1] = 1.0 # Slack variable for max-headroom
+        row[-1] = 1.0
         ub_rows.append(row)
         ub_rhs.append(mu_brokers[j])
 
@@ -51,7 +42,7 @@ def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8,
     bounds = [(0.0, None) if route_mask[i, j] else (0.0, 0.0)
               for i in range(m) for j in range(n)] + [(margin, None)]
     objective = np.zeros(m * n + 1)
-    objective[-1] = -1.0 # Maximize minimum headroom
+    objective[-1] = -1.0    # maximize h
 
     result = linprog(
         objective,
@@ -67,10 +58,7 @@ def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8,
         raise ValueError(f"Transportation LP infeasible: {result.message}")
 
     routing = np.where(route_mask, np.maximum(result.x[:-1].reshape(m, n), 0.0), 0.0)
-    # HiGHS accepts constraint violations up to its feasibility tolerance
-    # (~1e-7), which exceeds the default margin: at an exactly critical
-    # instance it returns zero headroom (lambda_ij = mu_ij). Check the routing
-    # itself and reject anything short of the requested margin.
+    # HiGHS tolerates ~1e-7 violations, more than the margin: check the routing itself
     link_headroom = float(np.min((mu_links - routing)[route_mask])) if route_mask.any() else np.inf
     broker_headroom = float(np.min(mu_brokers - routing.sum(axis=0)))
     if min(link_headroom, broker_headroom) < 0.5 * margin:
@@ -81,12 +69,8 @@ def transportation_feasibility(lambdas_total, mu_links, mu_brokers, margin=1e-8,
 
 def random_feasible_routing(lambdas_total, mu_links, mu_brokers, seed: int, margin: float = 1e-8,
                             interior_weight: float = 0.30, route_mask=None) -> np.ndarray:
-    """
-    Reproducible, diverse feasible routing (reference notebook's
-    random_feasible_initialization): a random vertex of the transportation
-    polytope (capacities reduced by margin) blended with the max-headroom
-    routing, which keeps the result strictly inside the open domain.
-    """
+    """The notebook's random_feasible_initialization: a random vertex of the transportation
+    polytope blended with the max-headroom routing, which keeps it strictly inside."""
     lambdas_total = np.asarray(lambdas_total, dtype=float)
     mu_links = np.asarray(mu_links, dtype=float)
     mu_brokers = np.asarray(mu_brokers, dtype=float)

@@ -1,19 +1,9 @@
 """
-Source worker process (distributed backend).
+Source process: one source's Poisson arrivals, one access queue per link
+served at Exp(mu_ij), routing by the current plan, and its best response
+(synchronous.source_best_response). The TCP hop to the broker is transport,
+not a model of mu_ij.
 
-Owns one source i: its offered rate lambda_i, its access links (mu_ij for
-every broker j it can reach), Poisson generation of work units, one explicit
-access queue per link served at Exp(mu_ij), routing of new units with the
-current planned fractions lambda_ij / lambda_i, and its own best response to
-the published prices (the shared synchronous.source_best_response).
-
-The access queues ARE the paper's access stage: a unit waits and is served
-at rate mu_ij here, then is handed to broker j over TCP. The TCP transfer is
-transport only and is not a model of mu_ij. Generation and service are paced
-on virtual clocks tied to the wall clock (see broker.py), so timer jitter
-does not change the queueing behavior.
-
-Run directly (normally started by the launcher or Docker Compose):
     python -m src.distributed.source --controller HOST:PORT
 """
 import argparse
@@ -40,7 +30,7 @@ class SourceWorker:
 
     # ---------------------------------------------------------------- traffic
     def _route(self) -> int:
-        """Broker for a new unit: probabilities lambda_ij / sum_j lambda_ij of the current plan."""
+        """Pick a broker with probabilities lambda_ij / lambda_i."""
         probs = self.x_row / self.x_row.sum() if self.x_row.sum() > 0 else self.mask / self.mask.sum()
         return int(self.rng_route.choice(len(probs), p=probs))
 
@@ -75,12 +65,12 @@ class SourceWorker:
                 await asyncio.sleep(delay)
             self.busy[j] = False
             unit["as"], unit["ac"] = start, free_at
-            writer.write(encode(unit))           # hand over to broker j
+            writer.write(encode(unit))
             await writer.drain()
 
     def metrics(self) -> dict:
         report = {
-            "routed": self.routed.tolist(),                            # into each access queue, this round
+            "routed": self.routed.tolist(),                            # this round
             "in_system": [len(q) + int(b) for q, b in zip(self.queues, self.busy)],
             "generated_total": self.generated_total,
         }
@@ -100,7 +90,7 @@ class SourceWorker:
         self.mask = self.mu_row > 0
         self.x_row = np.array(a["lambda_row"], dtype=float)
         m = len(self.mu_row)
-        # Separate streams (arrivals, routing, each access link) so draws do not depend on task interleaving
+        # separate streams, so draws don't depend on task interleaving
         streams = [np.random.default_rng(s) for s in np.random.SeedSequence(a["seed"]).spawn(2 + m)]
         self.rng_arrivals, self.rng_route, self.rng_service = streams[0], streams[1], streams[2:]
         self.queues = [deque() for _ in range(m)]
@@ -108,7 +98,7 @@ class SourceWorker:
         self.busy = [False] * m
         self.routed = np.zeros(m, dtype=int)
 
-        # Data plane: one connection per reachable broker
+        # one data connection per reachable broker
         self.writers = [None] * m
         for broker in a["brokers"]:
             if self.mask[broker["index"]]:
@@ -134,12 +124,11 @@ class SourceWorker:
                     tasks = [asyncio.create_task(self._generate(message["t0"]))]
                     tasks += [asyncio.create_task(self._serve_access(j)) for j in range(m) if self.mask[j]]
                 elif kind == "best_response":
-                    # Algorithm 1 Step 2 at this source
                     reply = {"type": "best_response", "req": message["req"], "metrics": self.metrics()}
                     try:
                         reply["lambda_br"] = source_best_response(self.mu_row, np.array(message["prices"]), self.rate)
                     except (RuntimeError, ValueError) as e:
-                        reply["failed"] = str(e)          # the controller holds this source's split
+                        reply["failed"] = str(e)          # the controller holds the split
                     await control.send(reply)
                 elif kind == "routing":
                     self.x_row = np.array(message["lambda_row"], dtype=float)

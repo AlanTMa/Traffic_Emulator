@@ -1,6 +1,4 @@
-"""
-Event definitions for the discrete-event simulation.
-"""
+"""Events of the discrete-event simulation."""
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
@@ -12,15 +10,11 @@ class EventType(Enum):
     BROKER_ARRIVAL = auto()
     BROKER_SERVICE_START = auto()
     BROKER_SERVICE_COMPLETE = auto()
-    # End of a controller window (price + routing update)
-    CONTROLLER_TICK = auto()
+    CONTROLLER_TICK = auto()      # end of a controller window
 
 @dataclass(order=True)
 class Event:
-    """
-    A simulation event.
-    Ordered by timestamp for the priority queue.
-    """
+    """Ordered by timestamp."""
     timestamp: float
     event_type: EventType = field(compare=False)
     source_id: Optional[int] = field(default=None, compare=False)

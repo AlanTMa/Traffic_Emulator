@@ -1,31 +1,18 @@
-"""
-Configuration loader for the emulator.
-"""
+"""Config loading and validation."""
 import copy
 import yaml
 from pathlib import Path
 from src.model.topology import Topology
 import numpy as np
 
-# Controller modes (simulation.controller_mode):
-#   static_algorithm1   - paper Algorithm 1 on the analytic model: no events or
-#                         queues; every iterate keeps Lambda_j <= mu_j - delta_s
-#                         through the common safe step.
-#   windowed_stochastic - event-driven queues driven by the reference notebook's
-#                         windowed stochastic scheme (EWMA of measured arrival
-#                         rates, damped prices, split inertia). No safe step:
-#                         no per-iteration capacity guarantee.
-#   capacity_safe_event_driven - the same event-driven queues, with the planned
-#                         routing advanced by one exact Algorithm 1 step per
-#                         window (same function as static_algorithm1): planned
-#                         Lambda_j <= mu_j - delta_s at every update. Measured
-#                         quantities are recorded, never used for control.
+# static_algorithm1: Algorithm 1 on the analytic model, no queues
+# windowed_stochastic: the notebook's scheme over event-driven queues, no safe step
+# capacity_safe_event_driven: Algorithm 1 steps on planned rates over event-driven queues
 CONTROLLER_MODES = ("static_algorithm1", "windowed_stochastic", "capacity_safe_event_driven")
 _LEGACY_MODES = {"static": "static_algorithm1", "synchronous": "windowed_stochastic",
                  "asynchronous": "windowed_stochastic"}
 ALGORITHM1_MODES = ("static_algorithm1", "capacity_safe_event_driven")
-# Algorithm parameters of each mode when a config does not give them: the paper's
-# Sec. V-A values for Algorithm 1, the notebook's cell 14 values for the windowed scheme
+# defaults: paper Sec. V-A for Algorithm 1, notebook cell 14 for the windowed scheme
 MODE_DEFAULTS = {
     "static_algorithm1": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12},
     "capacity_safe_event_driven": {"eta": 0.25, "gamma": 0.5, "delta_s": 1e-8, "eps": 1e-12, "beta": 0.3},
@@ -52,11 +39,7 @@ def load_config(config_path: str) -> dict:
         return yaml.load(f, Loader=_UniqueKeyLoader)
 
 def controller_mode(config: dict) -> str:
-    """
-    Resolve simulation.controller_mode. The older simulation.mode values
-    ('static', 'synchronous', 'asynchronous') are mapped for existing configs;
-    none of them selected an asynchronous controller.
-    """
+    """simulation.controller_mode; the old simulation.mode names are mapped."""
     sim_cfg = config.get('simulation', {})
     mode = sim_cfg.get('controller_mode') or _LEGACY_MODES.get(sim_cfg.get('mode'), 'windowed_stochastic')
     if mode not in CONTROLLER_MODES:
@@ -65,13 +48,9 @@ def controller_mode(config: dict) -> str:
 
 def with_controller_mode(config: dict, mode: str) -> dict:
     """
-    A copy of the config that runs under controller mode `mode`.
-
-    A config's algorithm section is written for its own mode, and the same name
-    can mean different things: eta is the split inertia in windowed_stochastic
-    but the Algorithm 1 step size in the other two modes. Switching between the
-    two Algorithm 1 modes keeps the parameters; any other switch replaces them
-    with the new mode's defaults (MODE_DEFAULTS).
+    Copy of the config under `mode`. eta is the split inertia in the windowed
+    scheme and the step size otherwise, so switching families swaps in that
+    mode's defaults; between the two Algorithm 1 modes the parameters are kept.
     """
     if mode not in CONTROLLER_MODES:
         raise ValueError(f"unknown controller_mode {mode!r}; expected one of {CONTROLLER_MODES}")
@@ -89,15 +68,9 @@ def with_controller_mode(config: dict, mode: str) -> dict:
 
 def topology_from_config(config: dict) -> Topology:
     """
-    Construct a Topology from a configuration dictionary.
-
-    Expects topology.sources [{id, rate}], topology.brokers [{id, capacity}]
-    and topology.access_capacities {"<source>-><broker>": capacity}. Every
-    source->broker pair must appear exactly once, either there or in the
-    optional topology.unavailable_links list ["<source>-><broker>", ...] of
-    links that do not exist (sparse topologies). Missing, unknown, duplicate,
-    conflicting or malformed entries raise ValueError; no capacity is ever
-    left at zero by omission. Values are then validated by Topology.
+    topology.sources [{id, rate}], brokers [{id, capacity}], access_capacities
+    {"S->B": mu} and optional unavailable_links ["S->B"]; every pair must appear
+    in exactly one of the two.
     """
     if not isinstance(config, dict) or not isinstance(config.get('topology'), dict):
         raise ValueError("config needs a 'topology' mapping")
@@ -130,7 +103,7 @@ def topology_from_config(config: dict) -> Topology:
     src_map = {name: i for i, name in enumerate(sources)}
     brk_map = {name: j for j, name in enumerate(brokers)}
     mu_links = np.zeros((len(sources), len(brokers)))
-    specified = np.zeros(mu_links.shape, dtype=bool)   # not a value sentinel: NaN must stay an error
+    specified = np.zeros(mu_links.shape, dtype=bool)   # NaN must stay an error
     route_mask = np.ones(mu_links.shape, dtype=bool)
 
     def link_index(link):

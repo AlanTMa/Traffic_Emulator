@@ -1,18 +1,9 @@
 """
-Compare the three controller/simulation modes on one topology.
+The three controller modes side by side on one topology. Both event modes use
+the same seed; their statistics are taken after --warmup-time.
 
-  static_algorithm1           Algorithm 1 on the analytic model (to tol + certificate)
-  capacity_safe_event_driven  event-driven queues, Algorithm 1 on planned rates
-  windowed_stochastic         event-driven queues, notebook windowed controller
-
-Both event modes use the same seed (the same random streams, though their
-different routings consume them differently). Event statistics are taken
-after --warmup-time and are finite-run estimates, not analytical means.
-
-Usage:
     python -m scripts.compare_modes [--config config/paper_5x3.yaml] [--multiplier 1.0]
                                     [--duration 1000] [--warmup-time 200] [--seed 0]
-                                    [--window 5] [--output-dir runs/compare_modes]
 """
 import argparse
 import json
@@ -28,7 +19,7 @@ from src.runtime.metadata import git_revision
 MODES = ("static_algorithm1", "capacity_safe_event_driven", "windowed_stochastic")
 
 def compare(topology, *, duration: float, warmup_time: float, seed: int, window: float = 5.0) -> dict:
-    """Run the three modes; returns {mode: stats} (static stats have no measured fields)."""
+    """{mode: stats}; the static stats have no measured fields."""
     _, static = static_experiment(topology)
     results = {"static_algorithm1": static}
     for mode in MODES[1:]:
@@ -37,7 +28,7 @@ def compare(topology, *, duration: float, warmup_time: float, seed: int, window:
     return results
 
 def comparison_table(results: dict, topology) -> pd.DataFrame:
-    """Rows: quantities; columns: modes. Measured quantities are blank for the static mode."""
+    """Quantities by mode."""
     rows = {}
     get = lambda r, k: r.get(k, np.nan) if r.get(k) is not None else np.nan
     for mode in MODES:

@@ -1,18 +1,11 @@
-"""
-Source best-response solver for the M/M/1 queueing model.
-"""
+"""Threshold best response (eq. 16)."""
 import numpy as np
 
 def best_response_mm1(mu_row: np.ndarray, p: np.ndarray, lam_i: float, flow_tol: float = 1e-12, max_iter: int = 320) -> np.ndarray:
     """
-    Exact M/M/1 source best response using activation thresholds.
-
-    Solves min sum_j x_j/(mu_j-x_j) + p_j x_j subject to x>=0 and sum_j x_j = lam_i.
-    The multiplier search starts at the minimum activation threshold.
-
-    Raises ValueError for invalid inputs (same checks as the reference
-    notebook's best_response_mm1) and RuntimeError if the bisection cannot
-    meet the conservation tolerance.
+    min sum_j x_j/(mu_j - x_j) + p_j x_j s.t. x >= 0, sum x = lam_i, by bisection
+    on the multiplier from the smallest activation threshold. ValueError on bad
+    input, RuntimeError if the bisection can't meet the tolerance.
     """
     mu = np.asarray(mu_row, dtype=float)
     p = np.asarray(p, dtype=float)
@@ -34,23 +27,20 @@ def best_response_mm1(mu_row: np.ndarray, p: np.ndarray, lam_i: float, flow_tol:
     if lam_i == 0:
         return np.zeros_like(mu)
 
-    # Activation thresholds: M_ij = C_ij(0) + p_j = 1/mu_ij + p_j
+    # activation thresholds 1/mu_j + p_j
     thresholds = p + 1.0 / mu
     unique_thresholds = np.unique(np.sort(thresholds))
 
     def allocation_from_pivot(delta, pivot):
-        # q = mu * (alpha - p)
-        # alpha = pivot + delta
+        # x = mu (1 - 1/sqrt(q)) with q = mu (alpha - p), alpha = pivot + delta; written as the notebook does
         q = mu * ((pivot - p) + delta)
         active = q > 1.0
         x = np.zeros_like(mu)
         if np.any(active):
-            # x = mu * (1 - 1/sqrt(q))
-            # Notebook uses: -mu * np.expm1(-0.5 * np.log(q))
             x[active] = -mu[active] * np.expm1(-0.5 * np.log(q[active]))
         return np.clip(x, 0.0, np.nextafter(mu, 0.0))
 
-    # Bracket the root
+    # bracket the root
     pivot = float(unique_thresholds[0])
     lo = 0.0
     hi = None
@@ -107,11 +97,7 @@ def best_response_mm1(mu_row: np.ndarray, p: np.ndarray, lam_i: float, flow_tol:
     return best_x
 
 def best_response_available(mu_row: np.ndarray, p: np.ndarray, lam_i: float, **kwargs) -> np.ndarray:
-    """
-    Best response over the routes that exist (mu_row > 0); unavailable routes
-    (mu_row == 0 in a sparse topology) get zero flow. Identical to
-    best_response_mm1 when every route exists.
-    """
+    """Best response over the routes that exist (mu_row > 0); missing routes get 0."""
     mu_row = np.asarray(mu_row, dtype=float)
     available = mu_row > 0
     if available.all():

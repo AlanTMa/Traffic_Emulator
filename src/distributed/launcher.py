@@ -1,20 +1,8 @@
 """
-One-command launcher of the distributed emulator.
-
-    python -m src.cli up [--config config/paper_5x3.yaml | --sources N --brokers M]
-                         [--backend docker|local] [--window 5] [--output-dir runs/distributed]
-
-Resolves the run (topology, Algorithm 1 parameters, seed) into
-<output-dir>/resolved_config.yaml, then starts one controller, M broker
-processes, N source processes and the dashboard:
-
-- backend "docker": `docker compose --profile distributed up --build
-  --scale source=N --scale broker=M` (docker-compose.yml); every process is
-  its own container.
-- backend "local": the same processes as child OS processes on this
-  machine, connected over localhost TCP (no Docker required).
-
-Ctrl+C stops everything.
+The `up` command: resolve the run into <output-dir>/resolved_config.yaml,
+then start the controller, M brokers, N sources and the dashboard as Docker
+Compose services (docker-compose.yml) or as child processes (--backend
+local). Ctrl+C stops everything.
 """
 import os
 import shutil
@@ -54,7 +42,7 @@ def prepare_run(config_path=None, sources=None, brokers=None, load=0.3, seed=42,
         config.setdefault("simulation", {})["window"] = float(window)
     settings = distributed_settings(config, overrides)
     resolved = resolved_config(config, settings)
-    topo = topology_from_config(resolved)                  # validates the resolved topology again
+    topo = topology_from_config(resolved)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / "resolved_config.yaml"
@@ -64,7 +52,7 @@ def prepare_run(config_path=None, sources=None, brokers=None, load=0.3, seed=42,
 
 def describe(run: dict):
     p = run["settings"]["params"]
-    print(f"Distributed emulator: {run['n']} sources x {run['m']} brokers from {run['source']}", flush=True)
+    print(f"{run['n']} sources x {run['m']} brokers from {run['source']}", flush=True)
     print(f"  Algorithm 1: eta={p['eta']} gamma={p['gamma']} delta_s={p['delta_s']} "
           f"({p['safe_step_variant']} safe step), round every {p['window']} s, seed {run['settings']['seed']}")
     for note in run["settings"]["notes"]:
@@ -82,11 +70,10 @@ def lan_address():
     return None if address.startswith("127.") else address
 
 def print_dashboard_urls(port: int):
-    lines = ["", f"==> Dashboard ready: http://localhost:{port}"]
+    lines = ["", f"dashboard: http://localhost:{port}"]
     address = lan_address()
     if address:
-        lines.append(f"    Other devices on this network: http://{address}:{port} "
-                     f"(if the network allows device-to-device connections)")
+        lines.append(f"           http://{address}:{port} from this network")
     print("\n".join(lines + [""]), flush=True)
 
 def port_in_use(port: int) -> bool:
@@ -122,15 +109,12 @@ def first_round_written(metrics: Path, since: float, timeout: float) -> bool:
     return False
 
 def announce_dashboard(port: int, hint: str, timeout: float, metrics: Path = None):
-    """
-    Print the dashboard's URLs once it answers and the first round is recorded.
-    Runs in the background, so the link appears below the build and startup
-    output (where it stays visible) instead of scrolling away above it.
-    """
+    """Print the dashboard URLs once it answers and the first round is written; from a
+    thread, so they land below the startup output instead of scrolling away."""
     since = time.time()
     def wait():
         if not dashboard_ready(port, timeout):
-            print(f"==> The dashboard did not answer on port {port} within {timeout:.0f} s; {hint}", flush=True)
+            print(f"no dashboard on port {port} after {timeout:.0f}s; {hint}", flush=True)
             return
         if metrics is not None:
             first_round_written(metrics, since, timeout=120)
@@ -163,7 +147,7 @@ def start_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, das
         procs.append(subprocess.Popen([py, "-m", "streamlit", "run", "src/dashboard/app.py", "--server.headless",
                                        "true", "--server.port", str(dashboard_port)], cwd=PROJECT_ROOT, env=dash_env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        announce_dashboard(dashboard_port, f"is port {dashboard_port} already in use? Try --dashboard-port",
+        announce_dashboard(dashboard_port, "port in use? try --dashboard-port",
                            timeout=60, metrics=Path(run["output_dir"]) / "metrics.jsonl")
     return procs
 
@@ -191,15 +175,13 @@ def run_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashb
               duration: float = None) -> int:
     for used, flag in ((port, "--port"), (dashboard_port, "--dashboard-port")):
         if (used != dashboard_port or dashboard) and port_in_use(used):
-            print(f"Port {used} is already in use (is another emulator or dashboard running?). "
-                  f"Stop it, or choose another port with {flag}.")
+            print(f"port {used} is already in use; stop what holds it or pass {flag}")
             return 2
     procs = start_local(run, port, dashboard, dashboard_port, duration)
-    print(f"  {len(procs)} processes started; Ctrl+C stops everything")
+    print(f"  {len(procs)} processes; Ctrl+C stops everything")
     try:
-        code = procs[0].wait()                       # the controller runs until stopped
+        code = procs[0].wait()
     except KeyboardInterrupt:
-        # Ctrl+C also reaches the children in this console; make sure they all stop
         code = 130
     stop_local(procs, port)
     return code
@@ -209,17 +191,14 @@ def run_local(run: dict, port: int = CONTROL_PORT, dashboard: bool = True, dashb
 def compose_command(run: dict, dashboard: bool = True, duration: float = None) -> list:
     services = [] if dashboard else ["controller", "broker", "source"]
     finite = ["--exit-code-from", "controller"] if duration is not None else []   # end with the controller
-    # The dashboard container's log only repeats Streamlit's URLs as seen from inside the
-    # container (its Docker-network address), which do not work; the launcher prints usable ones
+    # the dashboard container's own URLs are unusable from the host
     quiet = ["--no-attach", "dashboard"] if dashboard else []
     return ["docker", "compose", "--profile", "distributed", "up", "--build", *finite, *quiet,
             "--scale", f"source={run['n']}", "--scale", f"broker={run['m']}", *services]
 
 def docker_executable():
-    """
-    The docker CLI: on PATH, or in Docker Desktop's install folders (a terminal
-    opened before Docker was installed still has the old PATH).
-    """
+    """docker on PATH, or in Docker Desktop's install folders (a terminal opened
+    before the install still has the old PATH)."""
     found = shutil.which("docker")
     if found:
         return found
@@ -242,7 +221,7 @@ def compose_env(run: dict, duration: float = None, dashboard_port: int = 8501) -
     env = {**os.environ, "TE_CONFIG": f"runs/{rel_posix}/resolved_config.yaml", "TE_OUTPUT_DIR": f"runs/{rel_posix}"}
     env["TE_DURATION"] = "" if duration is None else str(duration)
     env["TE_DASHBOARD_PORT"] = str(dashboard_port)
-    git = git_revision()                     # the image has no .git; run.json records the host's revision
+    git = git_revision()                     # the image has no .git
     env["TE_GIT_SHA"] = git["sha"] or ""
     env["TE_GIT_DIRTY"] = "" if git["dirty"] is None else str(int(git["dirty"]))
     return env
@@ -250,7 +229,7 @@ def compose_env(run: dict, duration: float = None, dashboard_port: int = 8501) -
 def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashboard_port: int = 8501) -> int:
     docker = docker_executable()
     if docker is None:
-        print("docker was not found. Install Docker Desktop, or run the same processes locally with --backend local.")
+        print("docker not found; install Docker Desktop or use --backend local")
         return 2
     env = compose_env(run, duration, dashboard_port)
     env["PATH"] = str(Path(docker).parent) + os.pathsep + env.get("PATH", "")   # compose plugin, credential helper
@@ -259,32 +238,28 @@ def run_docker(run: dict, dashboard: bool = True, duration: float = None, dashbo
     except subprocess.TimeoutExpired:
         running = False
     if not running:
-        print("Docker is installed but not running: start Docker Desktop, then run this again.")
+        print("docker is not running")
         return 2
-    # One emulator per project: a second `compose up` would silently take over the running containers
+    # a second compose up would take over the running containers
     active = subprocess.run([docker, "compose", "--profile", "distributed", "--profile", "reference", "ps", "-q"],
                             cwd=PROJECT_ROOT, env=env, capture_output=True, text=True)
     if active.stdout.strip():
-        print("An emulator is already running in Docker. Stop it first (Ctrl+C in its terminal, or "
-              "`docker compose --profile distributed down`), then run this again.")
+        print("an emulator is already running (docker compose --profile distributed down)")
         return 2
     if dashboard and port_in_use(dashboard_port):
-        print(f"Port {dashboard_port} is already in use (another dashboard?). Stop it, or choose another port "
-              f"with --dashboard-port.")
+        print(f"port {dashboard_port} is already in use; pass --dashboard-port")
         return 2
     cmd = compose_command(run, dashboard, duration)
     print("  " + " ".join(cmd))
     if dashboard:
-        print(f"  dashboard: http://localhost:{dashboard_port} (the link is shown again once it is ready)")
-        announce_dashboard(dashboard_port, "see why with: docker compose --profile distributed logs dashboard",
+        announce_dashboard(dashboard_port, "docker compose --profile distributed logs dashboard",
                            timeout=900,                           # the first build takes a few minutes
                            metrics=Path(run["output_dir"]) / "metrics.jsonl")
     proc = subprocess.Popen([docker, *cmd[1:]], cwd=PROJECT_ROOT, env=env)
     try:
         code = proc.wait()
     except KeyboardInterrupt:
-        # Compose got the same Ctrl+C and stops the containers (SIGTERM: each process
-        # shuts down cleanly); wait for that before removing them
+        # compose got the same Ctrl+C and is stopping the containers; wait for it
         try:
             code = proc.wait(timeout=60)
         except (KeyboardInterrupt, subprocess.TimeoutExpired):

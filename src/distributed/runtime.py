@@ -14,7 +14,7 @@ def install_stop_handlers(stop: asyncio.Event):
         try:
             loop.add_signal_handler(sig, stop.set)
         except (NotImplementedError, RuntimeError, ValueError):
-            # Windows: no loop signal handlers; use a plain handler
+            # Windows
             try:
                 signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
             except (ValueError, OSError):

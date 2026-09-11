@@ -1,20 +1,9 @@
 """
-Wire protocol of the distributed emulator: newline-delimited JSON over TCP.
-
-Two kinds of connection:
-
-- Control plane, actor <-> controller (one persistent connection per
-  source/broker process). The actor sends `register`; the controller answers
-  with the actor's assignment (logical id and parameters). Afterwards the
-  controller sends requests (`price`, `best_response`) carrying a `req` id
-  that the actor echoes in its reply, and notifications (`start`, `routing`,
-  `stop`) that need no reply.
-- Data plane, source -> broker (one persistent connection per source/broker
-  pair): a stream of `work` messages, one per work unit, no replies.
-
-Floats are serialized with repr, so numbers survive a round trip exactly;
-the distributed controller therefore runs Algorithm 1 bit-for-bit like the
-in-process reference.
+JSON lines over TCP. Control plane: each worker keeps one connection to the
+controller (register/assignment, then request/reply rounds matched by `req`,
+plus start/routing/stop). Data plane: one connection per (source, broker)
+pair carrying work units. Floats are serialized with repr, so they round-trip
+exactly.
 """
 import asyncio
 import itertools
@@ -60,10 +49,8 @@ def advertised_host() -> str:
 
 class Channel:
     """
-    One JSON-lines connection. `request()` sends a message with a fresh
-    `req` id and waits for the reply with the same id; replies are routed by
-    a background reader started with `start_reader()`. Messages without a
-    matching pending request go to `inbox`.
+    One connection. request() sends with a fresh `req` and waits for the matching
+    reply; anything else goes to `inbox` (both need start_reader()).
     """
     _ids = itertools.count(1)
 

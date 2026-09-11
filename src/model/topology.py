@@ -1,15 +1,6 @@
 """
-Topology definitions for the traffic allocation problem.
-
-Units (normalized work): every rate in the model is a work rate in the same
-unit. The paper derives source rates from message traffic (msg/s x message
-size) and expresses rates and capacities in MB/s, i.e. as work rates. The
-event simulator treats one event as ONE NORMALIZED UNIT OF WORK: lambda_i is
-work units/s, and mu_ij / mu_j are work units served per second, with
-exponential service of one unit. For the 5x3 instance one unit = 1 MB (the
-reference notebook's PACKET_MB = 1.0). An event is not a message or a packet:
-message sizes and per-message service requirements are not modeled, so the
-simulated sojourn times are work-unit sojourn times, not message latencies.
+Source rates, access-link and broker capacities. All rates are work units per
+second (MB/s in the paper, 1 MB per unit for 5x3); a work unit is not a message.
 """
 from dataclasses import dataclass
 import numpy as np
@@ -17,17 +8,8 @@ import numpy as np
 @dataclass
 class Topology:
     """
-    Represents the network topology and traffic demands.
-
-    Attributes:
-        lambdas_total: (N,) offered work rate of each source (work units/s).
-        mu_links: (N, M) access-link service rates (work units/s).
-        mu_brokers: (M,) broker service rates (work units/s).
-        sources: List of source identifiers.
-        brokers: List of broker identifiers.
-        route_mask: (N, M) bool, True where the access link exists (default:
-            all True). Unavailable links are stored with mu_ij = 0 and carry
-            no flow; every model function treats mu_ij = 0 as "no link".
+    lambdas_total (N,), mu_links (N, M), mu_brokers (M,), and route_mask (N, M)
+    bool, False where a link does not exist (stored as mu_ij = 0, no flow).
     """
     lambdas_total: np.ndarray
     mu_links: np.ndarray
@@ -37,7 +19,7 @@ class Topology:
     route_mask: np.ndarray = None
 
     def __post_init__(self):
-        """Validate dimensions, ids and values; raises ValueError on any problem."""
+        """Validates; ValueError on any problem."""
         self.sources, self.brokers = list(self.sources), list(self.brokers)
         n_sources, n_brokers = len(self.sources), len(self.brokers)
         if n_sources == 0 or n_brokers == 0:
@@ -54,7 +36,6 @@ class Topology:
         except (TypeError, ValueError) as e:
             raise ValueError(f"topology rates and capacities must be numeric: {e}") from None
 
-        # Dimensions
         if self.route_mask is None:
             self.route_mask = np.ones((n_sources, n_brokers), dtype=bool)
         self.route_mask = np.asarray(self.route_mask, dtype=bool)
@@ -66,11 +47,8 @@ class Topology:
             raise ValueError(f"mu_links shape {self.mu_links.shape} must be ({n_sources}, {n_brokers})")
         if self.mu_brokers.shape != (n_brokers,):
             raise ValueError(f"mu_brokers shape {self.mu_brokers.shape} must be ({n_brokers},)")
-        # Unavailable links have no capacity (the mask is the explicit statement)
-        self.mu_links = np.where(self.route_mask, self.mu_links, 0.0)
+        self.mu_links = np.where(self.route_mask, self.mu_links, 0.0)   # missing links have no capacity
 
-        # Values: finite; rates >= 0; capacities > 0 (the M/M/1 model needs
-        # every access link and broker to serve at a positive rate)
         for name, values in (("lambdas_total", self.lambdas_total), ("mu_links", self.mu_links),
                              ("mu_brokers", self.mu_brokers)):
             if not np.all(np.isfinite(values)):

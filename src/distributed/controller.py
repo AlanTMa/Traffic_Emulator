@@ -1,22 +1,9 @@
 """
-Controller / coordinator process (distributed backend).
-
-Responsibilities:
-- load the run config and topology; decide Algorithm 1 parameters (settings.py)
-- register broker and source processes and assign them logical ids
-  (idempotent per process instance; N and M come from the topology)
-- run synchronous Algorithm 1 rounds every `window` seconds, forever:
-    1. planned loads Lambda_j = sum_i lambda_ij (controller state)
-    2. each BROKER returns its damped price  (synchronous.broker_price)
-    3. each SOURCE returns its best response (synchronous.source_best_response)
-    4. the controller applies the common safe step (synchronous.apply_common_step)
-       and sends every source its new routing row
-- Proposition 1 diagnostics and telemetry for every round (telemetry.schema),
-  aggregating the measurements that brokers and sources report
-- stop on Ctrl+C / SIGTERM (or after --duration), telling every process
-
-Reaching the certificate does not stop the run: traffic keeps flowing under
-the converged routing and rounds continue.
+Controller process. Registers the brokers and sources, runs one Algorithm 1
+round every `window` seconds (brokers price, sources best-respond, the
+controller applies the common safe step and sends out the routing), writes
+diagnostics and telemetry, and stops everything on Ctrl+C, SIGTERM or
+--duration. Reaching the certificate does not stop the run.
 
     python -m src.distributed.controller --config config/paper_5x3.yaml
 """
@@ -50,7 +37,6 @@ class ControllerService:
         self.round_timeout = round_timeout or max(5.0, 2 * self.p["window"])
         self.n, self.m = self.topology.n_sources, self.topology.n_brokers
 
-        # Algorithm 1 state on planned rates (same initialization as the reference backend)
         self.state = algorithm1_initial_state(self.topology, self.p["delta_s"], self.p["eps"])
 
         self.slots = {"source": {}, "broker": {}}              # instance -> logical index
@@ -79,9 +65,9 @@ class ControllerService:
     async def _on_actor(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         channel = Channel(reader, writer)
         hello = await channel.recv()
-        if hello is None:                                    # health-check probe: connect and close
+        if hello is None:                                    # health-check probe
             return await channel.close()
-        if hello.get("type") == "shutdown":                  # from the launcher / an operator
+        if hello.get("type") == "shutdown":
             log("shutdown requested")
             self.stop.set()
             await channel.send({"type": "ok"})
@@ -122,7 +108,7 @@ class ControllerService:
             if ready.get("type") == "ready":
                 self.ready_sources.add(index)
                 log(f"source {topo.sources[index]} ready ({instance})")
-                if self.t0 is not None:        # a restarted source rejoins a running emulation
+                if self.t0 is not None:        # a restarted source rejoins
                     await channel.send({"type": "start", "t0": time.time()})
                 if len(self.ready_sources) == self.n:
                     self.sources_ready.set()
@@ -147,7 +133,7 @@ class ControllerService:
         topo, state, p = self.topology, self.state, self.p
         loads = compute_broker_loads(state.lambda_ij)
 
-        # Step 1 at the brokers: damped price at the planned load
+        # brokers: prices
         replies = await self._gather("broker", [{"type": "price", "price": float(state.prices[j]),
                                                  "load": float(loads[j])} for j in range(self.m)])
         failed = [j for j, r in enumerate(replies) if isinstance(r, Exception)]
@@ -158,20 +144,20 @@ class ControllerService:
         new_prices = np.array([r["price"] for r in replies], dtype=float)
         broker_metrics = [r["metrics"] for r in replies]
 
-        # Step 2 at the sources: best responses to the new prices
+        # sources: best responses
         replies = await self._gather("source", [{"type": "best_response", "prices": new_prices}] * self.n)
         lambda_br = state.lambda_ij.copy()
         br_failures, source_metrics = [], []
         for i, r in enumerate(replies):
             if isinstance(r, Exception) or "failed" in r:
-                br_failures.append(i)          # hold this source's split (Delta_ij = 0)
+                br_failures.append(i)          # hold its split
                 source_metrics.append(None)
             else:
                 lambda_br[i] = np.array(r["lambda_br"], dtype=float)
                 source_metrics.append(r["metrics"])
         self.br_failures_total += len(br_failures)
 
-        # Steps 3-4 at the controller: common safe step, routing update
+        # safe step and routing
         self.state, _, _ = apply_common_step(state, topo, lambda_br, new_prices, p["eta"], p["eps"], p["delta_s"],
                                              p["safe_step_variant"], br_failures)
         for i, channel in enumerate(self.channels["source"]):
@@ -209,7 +195,7 @@ class ControllerService:
             route_rel=self.state.route_rel, price_rel=self.state.price_rel, eps=p["eps"],
             execution_backend="distributed",
             round_duration=dt,
-            # Measured by the processes (the controller never uses these for control)
+            # measured, not used for control
             lambda_hat_j=self.lambda_hat, util_measured_j=self.lambda_hat / topo.mu_brokers,
             broker_rate_measured_j=broker_rate,
             access_rate_measured_ij=access_rate,
@@ -222,8 +208,7 @@ class ControllerService:
             latency_mean=mean, latency_p50=p50, latency_p95=p95, latency_p99=p99,
             latency_mean_i=[float(totals[src == i].mean()) if np.any(src == i) else np.nan for i in range(n)],
             latency_mean_total=latency_sum_total / completed_total if completed_total else np.nan,
-            # End-to-end sojourn = queueing (the modeled M/M/1 stages) + transfer
-            # (process-to-process hand-off: TCP plus timer granularity, not modeled)
+            # transfer = the TCP hand-off plus timer granularity, not modeled
             latency_parts={"access_wait": parts[0], "access_service": parts[1], "transfer": parts[2],
                            "broker_wait": parts[3], "broker_service": parts[4]},
             queueing_sojourn_mean=float(parts[0] + parts[1] + parts[3] + parts[4]),
@@ -240,8 +225,7 @@ class ControllerService:
                            parameters=self.p, config_path=self.config_path,
                            extra={"execution_backend": "distributed", "notes": self.settings["notes"],
                                   "processes": processes,
-                                  "actor_seeds": "[root_seed, role (1=source, 2=broker), index]; a source spawns "
-                                                 "separate arrival, routing and per-link service streams from it"})
+                                  "actor_seeds": "[root_seed, role (1 source, 2 broker), index]"})
 
     # ---------------------------------------------------------------- lifecycle
     async def run(self):
@@ -262,7 +246,7 @@ class ControllerService:
                 self.t0 = time.time() + 0.2
                 for channel in self.channels["source"]:
                     await channel.send({"type": "start", "t0": self.t0})
-                log(f"all {self.m} brokers and {self.n} sources up; traffic started (Ctrl+C to stop)")
+                log(f"{self.m} brokers and {self.n} sources up; traffic started")
                 await self._rounds()
         finally:
             await self._shutdown(server)

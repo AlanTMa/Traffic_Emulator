@@ -1,25 +1,11 @@
-"""
-Runtime state for the traffic allocation emulator.
-"""
+"""Algorithm 1 state."""
 from dataclasses import dataclass, field
 import numpy as np
 
 @dataclass
 class SystemState:
-    """
-    Holds the current state of the distributed emulator.
-
-    Attributes:
-        lambda_ij: (N, M) Current routing allocation.
-        prices: (M,) Current broker congestion prices.
-        iteration: Current controller iteration.
-        s_j: (M,) Per-broker step bounds of the last iteration (None before any).
-        s_t: Common safe step used by the last iteration (nan before any).
-        route_rel: Relative routing change of the last iteration.
-        price_rel: Relative price change of the last iteration.
-        br_failures: Sources whose best response failed in the last iteration
-            and kept their split (only with on_best_response_failure="hold").
-    """
+    """lambda_ij, prices, and the last iteration's s_j, s_t, route_rel, price_rel
+    and br_failures (the sources that were held)."""
     lambda_ij: np.ndarray
     prices: np.ndarray
     iteration: int = 0

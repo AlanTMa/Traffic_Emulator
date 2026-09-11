@@ -1,12 +1,8 @@
-# Baseline 5x3 Experiment from Paper
-# Windowed stochastic simulation of the distributed pricing scheme
-# (notebook: SIM_DURATION_SEC, TIME_WINDOW, WARMUP_WINDOWS, ETA_SPLIT,
-# GAMMA_PRICE, BETA_LAMBDA)
+# The paper's 5x3 instance (notebook seed 42), set up for the notebook's windowed experiment.
 simulation:
-  # No duration: runs until stopped. The notebook ran 300s (60 windows);
-  # add "duration: 300" to reproduce exactly that.
-  window: 5       # seconds per window; one price + routing update each
-  warmup: 4       # windows before sources start adapting their splits
+  # duration: 300 reproduces the notebook's 300 s run; without it, runs until stopped
+  window: 5
+  warmup: 4       # windows before the splits start adapting
   controller_mode: "windowed_stochastic"
 
 algorithm:
@@ -17,9 +13,7 @@ algorithm:
   convergence_tol: 1e-10
 
 topology:
-  # Exact seed-42 instance from the reference notebook (cells 0-2), MB/s.
-  # The event simulator reads these as normalized work units/s, 1 unit = 1 MB.
-  # Rates: sum over topics of msg/s x size, / 1024 (e.g. P2 = 30780/1024).
+  # MB/s as in the notebook; one work unit = 1 MB
   sources:
     - {id: "P0", rate: 0.15625}
     - {id: "P1", rate: 0.09765625}

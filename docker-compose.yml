@@ -1,23 +1,12 @@
-# Traffic Emulator services.
-#
-# Distributed emulator (normally started by `python -m src.cli up` / `traffic-emulator up`,
-# which writes the resolved config and sets TE_CONFIG / TE_OUTPUT_DIR):
-#
-#   docker compose --profile distributed up --build --scale source=5 --scale broker=3
-#
-# Every source and broker is its own container; N and M are the replica
-# counts (they must match the topology in TE_CONFIG). Workers register with
-# the controller over TCP and receive their logical id and parameters.
-#
-# Single-process reference emulator:
-#
-#   docker compose --profile reference up --build
+# Started by `python -m src.cli up`, which sets TE_CONFIG and TE_OUTPUT_DIR:
+#   docker compose --profile distributed up --build --scale source=N --scale broker=M
+# Single-process emulator: docker compose --profile reference up --build
 
 x-app: &app
   build: .
   image: traffic-emulator:latest
   volumes:
-    - ./runs:/app/runs            # telemetry and run metadata (written by the controller only)
+    - ./runs:/app/runs            # telemetry
     - ./config:/app/config:ro
   environment:
     PYTHONUNBUFFERED: "1"
@@ -34,7 +23,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       TE_DURATION: ${TE_DURATION:-}       # empty: run until stopped
-      TE_GIT_SHA: ${TE_GIT_SHA:-}         # recorded in run.json (the image has no .git)
+      TE_GIT_SHA: ${TE_GIT_SHA:-}         # the image has no .git
       TE_GIT_DIRTY: ${TE_GIT_DIRTY:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 7000), 2).close()"]
@@ -45,8 +34,7 @@ services:
   broker:
     <<: *app
     profiles: [distributed]
-    # Replicated with --scale broker=M. Each replica advertises its container IP
-    # for the source -> broker data plane (port 7100 inside the container).
+    # --scale broker=M; each advertises its container IP for the data plane
     command: ["python", "-m", "src.distributed.broker", "--controller", "controller:7000", "--port", "7100"]
     depends_on:
       controller:
@@ -55,7 +43,7 @@ services:
   source:
     <<: *app
     profiles: [distributed]
-    # Replicated with --scale source=N.
+    # --scale source=N
     command: ["python", "-m", "src.distributed.source", "--controller", "controller:7000"]
     depends_on:
       controller:
@@ -71,7 +59,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       TRAFFIC_EMULATOR_OUTPUT_DIR: /app/${TE_OUTPUT_DIR:-runs/latest}
-      TRAFFIC_EMULATOR_OBSERVER: "1"      # read-only: watches the run, never controls it
+      TRAFFIC_EMULATOR_OBSERVER: "1"      # read-only
 
   emulator:
     <<: *app

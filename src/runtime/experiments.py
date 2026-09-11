@@ -1,16 +1,8 @@
 """
-Shared experiment runners for comparing controller/simulation modes.
-
-- static_experiment: static_algorithm1 to tol and the Proposition 1
-  certificate (paper Step 5), with trajectory statistics.
-- event_experiment: an event-driven run under one of
-    "frozen"                     routing fixed at x0 (queueing validation)
-    "windowed_stochastic"        notebook windowed controller
-    "capacity_safe_event_driven" Algorithm 1 steps on planned rates
-  with measured statistics taken after `warmup_time`.
-
-Measured event statistics are finite-run estimates; they are not expected
-to equal the analytical M/M/1 means exactly.
+Experiment runners: static_experiment (Algorithm 1 to tolerance and the
+certificate, with trajectory statistics) and event_experiment (one
+event-driven run with the routing frozen, the windowed scheme, or Algorithm
+1; statistics after warmup_time).
 """
 from pathlib import Path
 
@@ -61,7 +53,7 @@ def max_multiplier(topology: Topology, margin: float = 1e-8) -> float:
     return lo
 
 def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=20000, delta_s=1e-8, eps=1e-12):
-    """static_algorithm1 until tol AND the certificate pass, with trajectory statistics."""
+    """Algorithm 1 until both tol and the certificate pass, with trajectory statistics."""
     state = algorithm1_initial_state(topo, delta_s, eps)
     objective = [system_objective(state.lambda_ij, topo.mu_links, topo.mu_brokers)]
     s_hist, broker_headroom, link_headroom, route_rel = [], [], [], []
@@ -74,7 +66,7 @@ def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=2
         broker_headroom.append(np.min(topo.mu_brokers - state.lambda_ij.sum(axis=0)))
         link_headroom.append(np.min((topo.mu_links - state.lambda_ij)[topo.route_mask]))
         if residual < tol:
-            # Notebook stopping point; continue to the paper's Step 5 (certificate)
+            # the notebook stops here; go on to the certificate
             iterations_to_tol = iterations_to_tol or state.iteration
             if compute_diagnostics(state.lambda_ij, state.prices, topo, eps=eps)["certified"]:
                 break
@@ -83,8 +75,8 @@ def static_experiment(topo: Topology, eta=0.25, gamma=0.5, tol=1e-10, max_iter=2
     _, info = solve_central(topo.lambdas_total, topo.mu_links, topo.mu_brokers, margin=delta_s)
     objective = np.array(objective)
     return L, {
-        "iterations_to_tol": iterations_to_tol,          # notebook stopping rule
-        "iterations": state.iteration,                   # + certificate (paper Step 5)
+        "iterations_to_tol": iterations_to_tol,
+        "iterations": state.iteration,                   # to the certificate
         "objective": objective[-1],
         "central_objective": info["objective"],
         "relative_objective_gap": (objective[-1] - info["objective"]) / info["objective"],
@@ -116,13 +108,7 @@ def _growth(series: np.ndarray) -> float:
 def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, duration: float, warmup_time: float,
                      seed: int, window: float = 5.0, eta: float = None, gamma: float = 0.5, beta: float = 0.3,
                      warmup_windows: int = 4, delta_s: float = 1e-8, eps: float = 1e-12):
-    """
-    One event-driven run; statistics over what happens after `warmup_time`.
-
-    mode "frozen" needs x0 (e.g. a static optimum); the controller modes
-    default to their own initial routing (LP; margin delta_s for Algorithm 1)
-    and step size (eta 0.35 windowed, 0.25 Algorithm 1).
-    """
+    """One event-driven run; statistics after warmup_time. "frozen" needs x0."""
     if mode not in EVENT_MODES:
         raise ValueError(f"mode must be one of {EVENT_MODES}")
     algorithm1 = mode == "capacity_safe_event_driven"
@@ -168,7 +154,7 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "mode": mode,
         "windows": len(all_rows),
         "completed": int(lat.size),
-        # Measured (post warm-up)
+        # measured after warm-up
         "latency_mean": float(lat.mean()),
         "latency_p50": float(np.percentile(lat, 50)),
         "latency_p95": float(np.percentile(lat, 95)),
@@ -176,18 +162,16 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "latency_mean_i": [float(lat[src == i].mean()) if np.any(src == i) else np.nan for i in range(topo.n_sources)],
         "model_mean_sojourn": model_mean,               # F / sum(lambda) of the final planned routing
         "latency_vs_model": float(lat.mean() / model_mean - 1.0),
-        "util_measured_j": np.mean([r["util_measured_j"] for r in rows], axis=0),          # EWMA, as notebook
-        # Raw arrival rates averaged over the post-warm-up windows: actual utilizations
+        "util_measured_j": np.mean([r["util_measured_j"] for r in rows], axis=0),          # EWMA, as the notebook
         "util_actual_j": np.mean([r["broker_rate_measured_j"] for r in rows], axis=0) / topo.mu_brokers,
         "access_util_actual_ij": np.mean([r["access_util_measured_ij"] for r in rows], axis=0),
         "queue_broker_mean_j": q_broker.mean(axis=0),
         "queue_broker_max": int(q_broker.max()),
         "queue_access_mean_ij": q_access.mean(axis=0),
         "queue_access_max": int(q_access.max()),
-        # Total queue occupancy in the last quarter of the measured period vs
-        # the first quarter (>> 1 suggests growth rather than a stationary queue)
+        # last quarter / first quarter of the total occupancy; well above 1 means growth
         "queue_growth": _growth(q_broker.sum(axis=1) + q_access.sum(axis=(1, 2))),
-        # Planned (controller state)
+        # planned
         "fraction_ij": np.array(last["fraction_ij"]),
         "util_planned_j": np.array(last["util_j"]),
         "access_util_planned_ij": np.array(last["access_util_ij"]),
@@ -204,7 +188,7 @@ def event_experiment(topo: Topology, mode: str, *, x0: np.ndarray = None, durati
         "safe_step_binding_windows": int(np.sum(s_t < 1.0)) if algorithm1 else None,
         "min_s_t": float(np.nanmin(s_t)) if algorithm1 else None,
         "br_failures_total": last.get("br_failures_total", 0),
-        # Route oscillation after warm-up
+        # route oscillation
         "mean_route_rel": float(np.nanmean([r["route_rel"] for r in rows])),
         "fraction_std": float(frac.std(axis=0).mean()),
     }

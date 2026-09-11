@@ -1,33 +1,11 @@
 """
-High-load sweep on the canonical 5x3 instance: lambda_i(r) = r * lambda_i.
+Load sweep on the 5x3 instance: lambda_i(r) = r lambda_i for r at fractions of
+r_max, the largest feasible multiplier (about 4.87, set by P2/P3's access links).
+For each r: Algorithm 1 to the certificate, an event run with that optimum
+frozen (queueing check), capacity_safe_event_driven, and windowed_stochastic.
 
-The multipliers are fractions of r_max, the largest r for which a feasible
-routing exists (transportation LP). In this topology r_max ~= 4.87 is set by
-the access links of P2/P3, while aggregate broker load is only ~63%; the
-sweep therefore reports the utilizations actually reached rather than
-forcing a target.
-
-For every r:
-  A. static_algorithm1 run until tol AND the Proposition 1 certificate pass
-     (paper Step 5; the notebook stops at tol only): optimum, certificate, safe-step
-     activity (iterations with s_t < 1), capacity headroom along the trajectory,
-     objective increases (oscillation), gap to the centralized solver.
-  B. Event simulation of the optimum routing A with the controller frozen:
-     queueing validation (measured work-unit sojourn times vs the M/M/1 model).
-  C. capacity_safe_event_driven: event-driven queues with Algorithm 1 steps
-     on planned rates: planned utilization and capacity feasibility, safe-step
-     activity, queue occupancy and growth, sojourn distribution.
-  D. windowed_stochastic from the LP initializer: EWMA-measured utilization,
-     planned routing, queues, latency distribution, planned-overload windows.
-
-Utilization is reported per broker and per access path, planned (lambda_ij /
-mu_ij, Lambda_j / mu_j) and actual (measured arrival rates averaged after the
-warm-up) - never as total offered traffic over total capacity alone.
-
-Usage:
-    python -m scripts.sweep_5x3 [--fractions 0.2,0.5,0.7,0.8,0.9,0.95]
-                                [--duration 1000] [--warmup-time 200] [--seed 0]
-                                [--output-dir runs/sweep_5x3] [--skip-events]
+    python -m scripts.sweep_5x3 [--fractions 0.2,0.5,0.7,0.8,0.9,0.95] [--duration 1000]
+                                [--warmup-time 200] [--seed 0] [--skip-events]
 """
 import argparse
 import json
@@ -42,11 +20,11 @@ from src.runtime.experiments import static_experiment
 from src.runtime.metadata import git_revision
 
 def base_topology(r: float = 1.0):
-    """The notebook's exact 5x3 instance with source rates scaled by r."""
+    """The 5x3 instance with rates scaled by r."""
     return canonical_5x3(r)
 
 def max_multiplier(margin: float = 1e-8) -> float:
-    """Largest feasible multiplier of the canonical 5x3 instance."""
+    """Largest feasible multiplier."""
     return _max_multiplier(canonical_5x3(), margin)
 
 def main():
@@ -92,7 +70,7 @@ def main():
                       f"link {ev['min_planned_link_headroom']:.3g}{steps}\n"
                       f"{'':>19}queues max broker {ev['queue_broker_max']} access {ev['queue_access_max']}, "
                       f"growth {ev['queue_growth']:.2f}, fraction std {ev['fraction_std']:.4f}, "
-                      # frozen routing has no controller, so no meaningful certificate
+                      # no controller in the frozen run
                       f"certified {ev['certified'] if mode != 'frozen' else 'n/a'}")
         results.append(row)
 

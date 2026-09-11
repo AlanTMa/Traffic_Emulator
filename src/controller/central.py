@@ -1,10 +1,6 @@
 """
-Centralized reference solver for the joint routing problem (paper eq. 4).
-
-Port of solve_central_reference() from the ANRG reference notebook
-(WiOpt26JNSC_Extended.ipynb, cell 4): SLSQP identifies the active route set,
-then the open-domain KKT equations on that active set are polished with
-least squares.
+Centralized solver for eq. 4: the notebook's solve_central_reference (SLSQP,
+then a least-squares polish of the KKT equations on the active set).
 """
 import numpy as np
 from scipy.optimize import least_squares, minimize
@@ -12,11 +8,7 @@ from src.controller.feasibility import transportation_feasibility
 from src.model.marginal_costs import mm1_marginal_cost_vectorized
 
 def system_objective(lambda_ij: np.ndarray, mu_links: np.ndarray, mu_brokers: np.ndarray) -> float:
-    """
-    F = sum_ij lambda_ij / (mu_ij - lambda_ij) + sum_j Lambda_j / (mu_j - Lambda_j)
-    (flow-weighted M/M/1 delay, paper eq. 4); +inf outside the open domain.
-    Routes with mu_ij = 0 do not exist (sparse topology) and must carry no flow.
-    """
+    """F (eq. 4); +inf outside the open domain. Missing links must carry no flow."""
     lambda_ij = np.asarray(lambda_ij, dtype=float)
     loads = lambda_ij.sum(axis=0)
     available = mu_links > 0
@@ -40,12 +32,9 @@ def _objective_gradient(lambda_ij, mu_links, mu_brokers):
 
 def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, active_tol: float = 1e-7):
     """
-    Solve min F subject to source conservation, lambda_ij in [0, mu_ij - margin]
-    and Lambda_j <= mu_j - margin.
-
-    Returns:
-        (lambda_ij, info) where info has 'objective', 'slsqp_message' and
-        'kkt_polish_residual' (None if the polish was not accepted).
+    min F s.t. conservation, lambda_ij <= mu_ij - margin, Lambda_j <= mu_j - margin.
+    Returns (lambda_ij, info) with the objective and the polish residual (None if
+    the polish was not accepted).
     """
     lambdas_total = np.asarray(lambdas_total, dtype=float)
     mu_links = np.asarray(mu_links, dtype=float)
@@ -75,8 +64,7 @@ def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, act
     if not result.success:
         raise RuntimeError(f"central solver failed: {result.message}")
 
-    # SLSQP reliably identifies the active set but may stop with a small KKT
-    # error; polish that active set by solving the open-domain KKT equations.
+    # SLSQP finds the active set; polish it on the KKT equations
     l_slsqp = result.x.reshape(m, n)
     active = (l_slsqp > active_tol) & (mu_links > 0)
     edges = list(zip(*np.where(active)))

@@ -10,16 +10,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 class TelemetryBuffer:
-    """
-    Records telemetry dicts (see src/telemetry/schema.py).
-
-    - In memory only the most recent `max_history` records are kept, so an
-      open-ended run does not grow without bound.
-    - If `path` is given, every record is appended to that JSON Lines file,
-      which is the complete persistent log. Writes go through one open
-      handle and are flushed at most every `flush_interval` seconds (and on
-      close), so readers see new rows within about that interval.
-    """
+    """Keeps the last max_history records in memory and, given a path, appends every
+    record to a JSONL file, flushed at most every flush_interval seconds."""
     def __init__(self, path: Optional[Path] = None, max_history: int = 2000, flush_interval: float = 1.0):
         self.history = deque(maxlen=max_history)
         self.path = Path(path) if path is not None else None
@@ -65,7 +57,7 @@ class JsonlTail:
         self.rows = deque(maxlen=max_rows)
         self.total_rows = 0
         self._offset = 0
-        self._first_line = None   # identifies the run (records carry a wall_time)
+        self._first_line = None   # identifies the run
 
     def _reset(self):
         self.rows.clear()
@@ -78,8 +70,7 @@ class JsonlTail:
             try:
                 return self._read_new()
             except ValueError:
-                # Unparseable data: the file was replaced under us; start over
-                self._reset()
+                self._reset()           # replaced under us
         return list(self.rows)
 
     def _read_new(self) -> List[Dict[str, Any]]:
@@ -89,15 +80,14 @@ class JsonlTail:
         with open(self.path, "rb") as f:
             first_line = f.readline()
             size = f.seek(0, 2)
-            # A shorter file or a different first record means a new run.
-            # Compare complete first lines only: all runs share a long prefix.
+            # a shorter file or a different first line is a new run
             if size < self._offset or (self._first_line is not None and first_line != self._first_line):
                 self._reset()
             if self._first_line is None and first_line.endswith(b"\n"):
                 self._first_line = first_line
             f.seek(self._offset)
             chunk = f.read()
-        # Only consume complete lines; a partially written last line waits
+        # complete lines only
         end = chunk.rfind(b"\n") + 1
         parsed = [json.loads(line) for line in chunk[:end].splitlines() if line.strip()]
         self.rows.extend(parsed)

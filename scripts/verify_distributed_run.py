@@ -1,16 +1,11 @@
 """
-Check a distributed run's telemetry against the in-process reference.
-
-Replays Algorithm 1 in this process (synchronous.iteration_step from the
-same initial state and parameters, taken from the run's resolved config)
-and compares every recorded round: lambda_ij, prices and s_t. Also checks
-source conservation, planned broker headroom and that work was served.
+Replay Algorithm 1 from a run's resolved config and compare every recorded
+round (lambda_ij, prices, s_t); also check conservation, headroom and that
+work was served. Same platform: bit-identical (--tol 0). Linux containers
+checked from Windows or macOS differ in the last bits (libm), hence the
+default tolerance.
 
     python -m scripts.verify_distributed_run runs/distributed [--tol 1e-12]
-
-Processes on the same platform as this check agree bit for bit (--tol 0);
-Linux containers checked from Windows or macOS differ in the last bits
-(different numpy / libm builds), hence the default tolerance.
 """
 import argparse
 import json
