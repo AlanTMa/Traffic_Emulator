@@ -48,6 +48,11 @@ Python 3.11 or newer.
     pip install -r requirements.txt
     pip install -e .        # optional, provides the traffic-emulator command
 
+`constraints.txt` pins the versions the test suite and the Docker image were
+validated with:
+
+    pip install -r requirements.txt -c constraints.txt
+
 ## Running
 
 The paper's 5x3 instance as containers, dashboard at http://localhost:8501.
