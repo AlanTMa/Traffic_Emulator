@@ -127,11 +127,12 @@ percentiles), and `run.json` (config, seed, parameters, git commit).
     src/dashboard    Streamlit app
     scripts          sweep_5x3, compare_modes, verify_distributed_run
     tests            unit, integration, regression (5x3 baseline from the notebook)
-    docs             reference_mapping (paper / notebook / code), distributed, symmetric_case
+    docs             reference_mapping (paper / notebook / code), plot_mapping (notebook plots /
+                     dashboard views), distributed, symmetric_case
 
 ## Tests
 
-    python -m pytest                 # everything, about 7 minutes
+    python -m pytest                 # everything, 10-15 minutes
     python -m pytest -m "not slow"
 
 The regression tests check the 5x3 run against values produced by the
