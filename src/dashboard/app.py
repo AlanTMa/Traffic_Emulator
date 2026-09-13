@@ -287,7 +287,7 @@ def render_overview(df):
     col2.metric("Max utilization", f"{df['max_util'].iloc[-1]:.2%}")
     col3.metric("Rel. change", "-" if pd.isna(rel_change) else f"{rel_change:.2e}")
 
-    chart_col1, chart_col2 = st.columns(2)
+    chart_col1, chart_col2, chart_col3 = st.columns(3)
     with chart_col1:
         st.subheader("Objective F")
         fig_obj = px.line(df, x="iteration", y="objective", labels={"iteration": "Iteration", "objective": "F"})
@@ -298,6 +298,15 @@ def render_overview(df):
                            labels={"iteration": "Iteration", "rel_change": "max(route, price)"}, log_y=True)
         log_axis(fig_conv, df['rel_change'])
         st.plotly_chart(fig_conv, width="stretch", key="chart_convergence")
+    with chart_col3:
+        st.subheader("Max broker utilization")
+        util = df[["iteration", "max_util_planned"]].rename(columns={"max_util_planned": "planned"})
+        if "util_measured_j" in df:
+            util["measured"] = df["max_util"]
+        fig = px.line(util.melt(id_vars="iteration", var_name="kind", value_name="util"), x="iteration", y="util",
+                      color="kind", labels={"iteration": "Iteration", "util": "max_j Λ_j / μ_j"})
+        fig.update_yaxes(tickformat=".0%")
+        st.plotly_chart(fig, width="stretch", key="chart_max_util")
 
 def render_brokers(df):
     _, brokers = node_names(df)
@@ -353,14 +362,26 @@ def render_routing(df):
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
     st.plotly_chart(fig, width="stretch", key="chart_routing_fractions")
 
-    col1, col2 = st.columns(2)
-    with col1:
+    event_mode = df["controller_mode"].iloc[-1] != "static_algorithm1"
+    cols = st.columns(3 if event_mode else 2)
+    with cols[0]:
         st.subheader("Current split")
         current = pd.DataFrame(df["fraction_ij"].iloc[-1], index=sources, columns=brokers)
         fig = px.imshow(current, text_auto=".1%", zmin=0, zmax=1, color_continuous_scale="Blues",
                         labels={"x": "Broker", "y": "Source", "color": "Fraction"}, aspect="auto")
         st.plotly_chart(fig, width="stretch", key="chart_routing_heatmap")
-    with col2:
+    if event_mode:
+        with cols[1]:
+            st.subheader("Average split")
+            warmup = int(((run_metadata() or {}).get("parameters") or {}).get("warmup") or 0)
+            after = df[df["iteration"] > warmup] if (df["iteration"] > warmup).any() else df
+            avg = pd.DataFrame(np.mean(np.array(after["fraction_ij"].tolist(), dtype=float), axis=0),
+                               index=sources, columns=brokers)
+            fig = px.imshow(avg, text_auto=".1%", zmin=0, zmax=1, color_continuous_scale="Blues",
+                            labels={"x": "Broker", "y": "Source", "color": "Fraction"}, aspect="auto")
+            st.plotly_chart(fig, width="stretch", key="chart_routing_average")
+            st.caption(f"{len(after)} windows after warm-up")
+    with cols[-1]:
         st.subheader("Per-source delay (model)")
         fig = px.line(per_source(df, "e2e_i", sources), x="iteration", y="e2e_i", color="source",
                       labels={"iteration": "Iteration",
