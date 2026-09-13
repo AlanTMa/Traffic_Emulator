@@ -150,3 +150,8 @@ emulator with the dashboard.
 
 Asynchronous updates (the paper leaves them open), dynamic capacities in the
 distributed processes, worker restarts, Kubernetes.
+
+## License
+
+MIT, see LICENSE. The notebook is ANRG USC's, also MIT; see
+THIRD_PARTY_NOTICES.md.
