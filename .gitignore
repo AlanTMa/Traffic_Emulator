@@ -36,3 +36,4 @@ desktop.ini
 
 # Dashboard-launched runs (generated config + log)
 runs/
+*.egg-info/
