@@ -65,5 +65,5 @@ in one process):
 | — | `controller_mode: capacity_safe_event_driven`: Algorithm 1 steps on planned rates over the event queues |
 | Load sweep by scaling μ to service loads 0.2 / 0.55 / 0.85 (cells 5–6) | `scripts/sweep_5x3.py` scales demand instead, λ_i(r) = r·λ_i up to r_max ≈ 4.87; `scripts/compare_modes.py` |
 | Verification batteries (cells 6–8) | `tests/regression/test_notebook_batteries.py`, `tests/unit/test_sparse.py`; load sweep and multistart marked `slow` |
-| `vary_link_capacity`, `vary_broker_capacity`, the 11 combos (cell 1); frozen in every notebook experiment | `model/dynamics.py`, config `dynamics.capacity_variation`, applied per window |
+| `vary_link_capacity`, `vary_broker_capacity`, the 11 combos (cell 1); frozen in every notebook experiment | `model/dynamics.py`, config `dynamics.capacity_variation`, applied per window; in-process backend only |
 | — | `model/symmetric.py`: closed-form symmetric optimum, docs/symmetric_case.md |

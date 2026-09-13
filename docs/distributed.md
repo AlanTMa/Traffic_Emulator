@@ -121,7 +121,8 @@ dashboard has no login, so don't expose it beyond that.
 - Synchronous rounds with a barrier; a dead broker stalls the price step.
 - No failure handling beyond that: sources do not reconnect to a restarted
   broker, and the controller is a single point of failure.
-- Static capacities and rates only; a `dynamics` section is refused.
+- Static capacities and rates only; a `dynamics` section is refused. Time-varying
+  capacities exist in the in-process backend only.
 - The controller computes Λ_j and sends it to the brokers, rather than the
   brokers assembling it from source announcements.
 - Timestamps come from each host's clock; multi-host runs need synced

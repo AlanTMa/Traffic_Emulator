@@ -111,6 +111,9 @@ the step size in the others.
     dynamics:                             # optional, in-process only
       capacity_variation: {combo: 3}      # the notebook's time-varying capacities
 
+Time-varying capacities run in the in-process backend only; `src.cli up`
+refuses a config with a `dynamics` section.
+
 Every run writes `metrics.jsonl`, one record per iteration (λ_ij, Λ_j,
 prices, delays, marginal costs, F, the safe step, every certificate residual,
 and in the event modes measured rates, queue lengths and sojourn
