@@ -133,10 +133,10 @@ percentiles), and `run.json` (config, seed, parameters, git commit).
     src/telemetry    record schema, JSONL writer and tail reader
     src/runtime      run metadata, experiment runners
     src/dashboard    Streamlit app
-    scripts          sweep_5x3, compare_modes, verify_distributed_run
+    scripts          sweep_5x3, compare_modes, verify_distributed_run, replicate_paper
     tests            unit, integration, regression (5x3 baseline from the notebook)
     docs             reference_mapping (paper / notebook / code), plot_mapping (notebook plots /
-                     dashboard views), distributed, symmetric_case
+                     dashboard views), paper_replication, distributed, symmetric_case
 
 ## Tests
 
@@ -147,6 +147,10 @@ The regression tests check the 5x3 run against values produced by the
 notebook's own functions, and a live multi-process run against the
 in-process algorithm, round by round. CI runs the suite on Python 3.11 to
 3.13 and a 40 s Docker run of the 5x3 emulator.
+
+`python -m scripts.replicate_paper` prints every number Sec. V of the paper
+reports next to the emulator's; [docs/paper_replication.md](docs/paper_replication.md)
+has the table.
 
 ## Docker
 

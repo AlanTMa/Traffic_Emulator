@@ -90,7 +90,7 @@ def solve_central(lambdas_total, mu_links, mu_brokers, margin: float = 1e-8, act
     for value, (i, j) in zip(polish.x[:len(edges)], edges):
         l_polished[i, j] = value
 
-    info = {"slsqp_message": result.message, "kkt_polish_residual": None}
+    info = {"slsqp_message": result.message, "slsqp_iterations": int(result.nit), "kkt_polish_residual": None}
     if (polish.success
             and np.max(np.abs(l_polished.sum(axis=1) - lambdas_total)) < 1e-8
             and np.all(l_polished.sum(axis=0) < mu_brokers)):
