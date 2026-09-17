@@ -20,7 +20,7 @@ def rows(path):
 @pytest.mark.parametrize("controller", ["static_algorithm1", "capacity_safe_event_driven", "windowed_stochastic"])
 def test_generated_run_reproducible(monkeypatch, tmp_path, controller):
     out = tmp_path / "gen"
-    run_cli(monkeypatch, "--sources", "6", "--brokers", "3", "--load", "0.4", "--seed", "7",
+    run_cli(monkeypatch, "--sources", "6", "--brokers", "3", "--rho-server", "0.4", "--seed", "7",
             "--controller", controller, "--duration", "20", "--window", "2", "--no-realtime", "--output-dir", str(out))
     cfg = yaml.safe_load((out / "generated_config.yaml").read_text())
     assert cfg["simulation"]["controller_mode"] == controller and cfg["simulation"]["seed"] == 7
@@ -60,8 +60,8 @@ def test_mode_parameter_overrides(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("argv, message", [
     (["--sources", "3"], "--sources needs --brokers"),
-    (["--sources", "2", "--brokers", "1", "--load", "0.9"], "infeasible"),
-    (["--sources", "2", "--brokers", "2", "--controller", "static_algorithm1", "--beta", "0.2"], "does not apply"),
+    (["--sources", "3", "--brokers", "1", "--load", "0.5", "--beta", "50"], "infeasible"),
+    (["--sources", "2", "--brokers", "2", "--controller", "static_algorithm1", "--beta-ewma", "0.2"], "does not apply"),
     (["--config", "x.yaml", "--sources", "2"], "not allowed with"),
     ([], "one of the arguments --config --sources is required"),
 ])

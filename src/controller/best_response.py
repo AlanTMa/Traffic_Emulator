@@ -105,3 +105,55 @@ def best_response_available(mu_row: np.ndarray, p: np.ndarray, lam_i: float, **k
     x = np.zeros_like(mu_row)
     x[available] = best_response_mm1(mu_row[available], np.asarray(p, dtype=float)[available], lam_i, **kwargs)
     return x
+
+def best_response_batch(mu: np.ndarray, p: np.ndarray, lam: np.ndarray, flow_tol: float = 1e-12,
+                        max_iter: int = 100) -> np.ndarray:
+    """
+    best_response_available for every source at once (rows of mu). Same
+    threshold structure, bisection on the multiplier vectorized over rows;
+    used where Algorithm 1 is only a means to the optimum (instance generation).
+    """
+    mu = np.asarray(mu, dtype=float)
+    lam = np.asarray(lam, dtype=float)
+    p = np.broadcast_to(np.asarray(p, dtype=float), mu.shape)
+    available = mu > 0
+    thresholds = np.where(available, p + 1.0 / np.where(available, mu, 1.0), np.inf)
+
+    def allocation(alpha):
+        q = np.where(available, mu, 1.0) * (alpha[:, None] - p)
+        active = available & (q > 1.0)
+        x = np.zeros_like(mu)
+        x[active] = -mu[active] * np.expm1(-0.5 * np.log(q[active]))
+        return np.minimum(x, np.nextafter(mu, 0.0))
+
+    # bracket alpha between consecutive thresholds, else above the largest one
+    order = np.sort(thresholds, axis=1)
+    lo, hi = order[:, 0].copy(), np.full(len(lam), np.nan)
+    for k in range(1, mu.shape[1]):
+        alpha = order[:, k]
+        enough = np.isfinite(alpha) & np.isnan(hi) & (allocation(alpha).sum(axis=1) >= lam)
+        hi[enough] = alpha[enough]
+        lo[np.isnan(hi) & np.isfinite(alpha)] = alpha[np.isnan(hi) & np.isfinite(alpha)]
+    open_rows = np.isnan(hi)
+    step = np.ones(len(lam))
+    for _ in range(1024):
+        if not open_rows.any():
+            break
+        candidate = lo + step
+        done = open_rows & (allocation(candidate).sum(axis=1) >= lam)
+        hi[done] = candidate[done]
+        open_rows &= ~done
+        step[open_rows] *= 2.0
+    hi = np.where(np.isnan(hi), lo, hi)
+
+    tolerance = flow_tol * np.maximum(1.0, np.abs(lam))
+    for _ in range(max_iter):
+        mid = 0.5 * (lo + hi)
+        residual = allocation(mid).sum(axis=1) - lam
+        if np.all(np.abs(residual) <= tolerance):
+            break
+        hi = np.where(residual >= 0.0, mid, hi)
+        lo = np.where(residual >= 0.0, lo, mid)
+    x = allocation(0.5 * (lo + hi))
+    x[lam <= 0] = 0.0
+    return x

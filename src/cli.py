@@ -10,7 +10,7 @@ import yaml
 from pathlib import Path
 from src.model.config import (CONTROLLER_MODES, MODE_DEFAULTS, controller_mode, load_config, topology_from_config,
                               with_controller_mode)
-from src.model.generate import generate_topology_config
+from src.model.generate import generate_instance
 from src.model.dynamics import CapacityVariation
 from src.simulation.engine import SimulationEngine
 from src.simulation.events import Event, EventType
@@ -151,11 +151,11 @@ def configure(config: dict, args) -> dict:
     config = with_controller_mode(config, args.controller) if args.controller else copy.deepcopy(config)
     mode = controller_mode(config)
     algorithm = config.get("algorithm") or {}
-    for key in ("eta", "gamma", "beta", "delta_s"):
-        value = getattr(args, key)
+    for flag, key in (("eta", "eta"), ("gamma", "gamma"), ("beta_ewma", "beta"), ("delta_s", "delta_s")):
+        value = getattr(args, flag, None)
         if value is not None:
             if key not in MODE_DEFAULTS[mode]:
-                raise ValueError(f"--{key.replace('_', '-')} does not apply to controller {mode}")
+                raise ValueError(f"--{flag.replace('_', '-')} does not apply to controller {mode}")
             algorithm[key] = value
     config["algorithm"] = algorithm
     simulation = config.get("simulation") or {}
@@ -173,9 +173,9 @@ def generated_config(args) -> dict:
     simulation = {"controller_mode": mode, "window": 5.0, "seed": seed}
     if mode == "windowed_stochastic":
         simulation["warmup"] = 4
-    config = {"simulation": simulation, "algorithm": dict(MODE_DEFAULTS[mode]),
-              "topology": generate_topology_config(args.sources, args.brokers, args.load, seed)}
-    return configure(config, args)
+    topology, stats = generate_instance(args.sources, args.brokers, args.rho_server, args.beta, seed)
+    config = {"simulation": simulation, "algorithm": dict(MODE_DEFAULTS[mode]), "topology": topology}
+    return configure(config, args), stats
 
 def main():
     parser = argparse.ArgumentParser(description="Traffic emulator")
@@ -189,14 +189,18 @@ def main():
     source.add_argument("--config", type=str, help="YAML config")
     source.add_argument("--sources", type=int, help="generate a topology with this many sources")
     run_parser.add_argument("--brokers", type=int, help="brokers in the generated topology")
-    run_parser.add_argument("--load", type=float, default=0.3, help="generated: offered rate / broker capacity (0.3)")
+    run_parser.add_argument("--rho-server", "--load", dest="rho_server", type=float, default=0.3,
+                            help="generated: offered rate / total server capacity (0.3)")
+    run_parser.add_argument("--beta", type=float, help="generated: access/server balance C_ij/C_j at the optimum "
+                                                       "(paper 4.0; default: links from the paper's range)")
     run_parser.add_argument("--seed", type=int, help="run seed, and the topology's when generated (42)")
     run_parser.add_argument("--controller", choices=CONTROLLER_MODES, help="controller mode (default: the config's)")
     run_parser.add_argument("--window", type=float, help="seconds per window (5)")
     run_parser.add_argument("--duration", type=float, help="simulated seconds (until stopped)")
     run_parser.add_argument("--warmup", type=int, help="warm-up windows, windowed_stochastic (4)")
-    for name in ("eta", "gamma", "beta", "delta-s"):
+    for name in ("eta", "gamma", "delta-s"):
         run_parser.add_argument(f"--{name}", type=float, help=f"override {name}")
+    run_parser.add_argument("--beta-ewma", type=float, help="override the measured-rate EWMA weight (config key beta)")
     run_parser.add_argument("--no-realtime", action="store_true", help="don't pace to the wall clock")
     run_parser.add_argument("--output-dir", default="runs/latest", help="(runs/latest)")
 
@@ -208,7 +212,9 @@ def main():
                                             "generate one)")
     up_parser.add_argument("--sources", type=int, help="source processes (must match --config)")
     up_parser.add_argument("--brokers", type=int, help="broker processes")
-    up_parser.add_argument("--load", type=float, default=0.3, help="generated: offered rate / broker capacity (0.3)")
+    up_parser.add_argument("--rho-server", "--load", dest="rho_server", type=float, default=0.3,
+                           help="generated: offered rate / total server capacity (0.3)")
+    up_parser.add_argument("--beta", type=float, help="generated: access/server balance at the optimum (paper 4.0)")
     up_parser.add_argument("--seed", type=int, default=42, help="root seed (42)")
     up_parser.add_argument("--backend", choices=["docker", "local"], default="docker",
                            help="docker (default) or local processes")
@@ -229,8 +235,9 @@ def main():
         config = args.config or (None if args.sources is not None or args.brokers is not None
                                  else "config/paper_5x3.yaml")
         try:
-            run = launcher.prepare_run(config, args.sources, args.brokers, args.load, args.seed, args.output_dir,
-                                       args.window, {"eta": args.eta, "gamma": args.gamma, "delta_s": args.delta_s})
+            run = launcher.prepare_run(config, args.sources, args.brokers, args.rho_server, args.seed, args.output_dir,
+                                       args.window, {"eta": args.eta, "gamma": args.gamma, "delta_s": args.delta_s},
+                                       beta=args.beta)
         except ValueError as e:
             parser.error(str(e))
         launcher.describe(run)
@@ -244,7 +251,7 @@ def main():
             if args.sources is not None:
                 if args.brokers is None:
                     parser.error("--sources needs --brokers")
-                config, written = generated_config(args), "generated_config.yaml"
+                (config, stats), written = generated_config(args), "generated_config.yaml"
             else:
                 base = load_config(args.config)
                 config = configure(base, args)
@@ -261,7 +268,9 @@ def main():
             config_path = out / written
             config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
             if args.sources is not None:
-                print(f"generated {args.sources}x{args.brokers} at load {args.load:.0%}, seed {config['simulation']['seed']}")
+                print(f"generated {args.sources}x{args.brokers}: rho_server {stats['rho_server']:.2f}"
+                      + (f", beta {stats['beta']:.3f}" if stats["beta"] is not None else "")
+                      + f", seed {config['simulation']['seed']}")
             print(f"config: {config_path}")
         run_simulation(str(config_path), real_time=not args.no_realtime, output_dir=args.output_dir)
     else:

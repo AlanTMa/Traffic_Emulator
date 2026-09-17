@@ -56,3 +56,16 @@ def test_best_response_rejects_invalid_inputs(mu, p, lam, match):
 def test_best_response_rejects_bad_tolerance():
     with pytest.raises(ValueError, match="flow_tol"):
         best_response_mm1(np.array([1.0, 2.0]), np.zeros(2), 1.0, flow_tol=0.0)
+
+def test_batch_best_response_matches_per_source():
+    from src.controller.best_response import best_response_available, best_response_batch
+    rng = np.random.default_rng(3)
+    for n, m in ((5, 3), (12, 4), (40, 9)):
+        mu = rng.uniform(5.0, 60.0, size=(n, m))
+        mu[rng.random((n, m)) < 0.1] = 0.0                       # some missing links
+        mu[:, 0] = np.maximum(mu[:, 0], 5.0)                     # every source keeps a route
+        p = rng.uniform(0.0, 0.5, size=m)
+        lam = rng.uniform(0.0, 0.8, size=n) * mu.sum(axis=1)
+        lam[0] = 0.0
+        expected = np.vstack([best_response_available(mu[i], p, lam[i]) for i in range(n)])
+        assert np.allclose(best_response_batch(mu, p, lam), expected, rtol=0, atol=1e-9)

@@ -15,7 +15,7 @@ from 0).
 | KKT conditions (eq. 14) | `solve_central_reference`, KKT polish | `central.solve_central` |
 | Source problem (eq. 15) | `best_response_mm1_optimizer` (validation only) | `test_notebook_batteries.optimizer_best_response` |
 | Threshold best response (eq. 16) | `best_response_mm1` | `best_response.best_response_mm1`; `best_response_available` for sparse rows |
-| 5x3 instance (Sec. V-A), seed 42 | cells 0–2 | `config/paper_5x3.yaml`, `tests/regression/data/baseline_5x3.json` |
+| 5x3 instance (Sec. V-A), seed 42 | cells 0–2 | `config/paper_5x3.yaml`, `tests/regression/data/baseline_5x3.json`; `model/generate.py` tiles its message classes, subscription patterns and server capacities to any N x M |
 | Units: msg/s × size → MB/s | `producer_emission_MBps`, `PACKET_MB = 1.0` | one event = one work unit, 1 MB for 5x3 |
 
 ## Algorithm 1 (Sec. IV-D)

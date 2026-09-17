@@ -19,13 +19,13 @@ import yaml
 from src.distributed.protocol import CONTROL_PORT
 from src.distributed.settings import distributed_settings, resolved_config
 from src.model.config import load_config, topology_from_config
-from src.model.generate import generate_topology_config
+from src.model.generate import generate_instance
 from src.runtime.metadata import git_revision
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-def prepare_run(config_path=None, sources=None, brokers=None, load=0.3, seed=42, output_dir="runs/distributed",
-                window=None, overrides=None) -> dict:
+def prepare_run(config_path=None, sources=None, brokers=None, rho_server=0.3, seed=42, output_dir="runs/distributed",
+                window=None, overrides=None, beta=None) -> dict:
     """Resolve and write the run's config; returns paths and N, M."""
     if config_path:
         config = load_config(config_path)
@@ -36,8 +36,9 @@ def prepare_run(config_path=None, sources=None, brokers=None, load=0.3, seed=42,
     else:
         if sources is None or brokers is None:
             raise ValueError("give --config, or --sources and --brokers for a generated topology")
+        topology, stats = generate_instance(sources, brokers, rho_server, beta, int(seed))
         config = {"simulation": {"controller_mode": "capacity_safe_event_driven", "seed": int(seed)},
-                  "topology": generate_topology_config(sources, brokers, load, int(seed))}
+                  "topology": topology}
     if window is not None:
         config.setdefault("simulation", {})["window"] = float(window)
     settings = distributed_settings(config, overrides)
@@ -48,7 +49,8 @@ def prepare_run(config_path=None, sources=None, brokers=None, load=0.3, seed=42,
     path = out / "resolved_config.yaml"
     path.write_text(yaml.safe_dump(resolved, sort_keys=False), encoding="utf-8")
     return {"config_path": path, "output_dir": out, "n": topo.n_sources, "m": topo.n_brokers,
-            "settings": settings, "source": config_path or f"generated {sources}x{brokers}"}
+            "settings": settings, "source": config_path or f"generated {sources}x{brokers}, rho_server "
+            f"{stats['rho_server']:.2f}" + (f", beta {stats['beta']:.3f}" if stats["beta"] is not None else "")}
 
 def describe(run: dict):
     p = run["settings"]["params"]

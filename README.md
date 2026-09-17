@@ -60,11 +60,23 @@ Needs Docker; Ctrl+C stops everything:
 
     python -m src.cli up
 
-Any N x M (capacities drawn from the notebook's ranges, rates scaled to
-`--load` of total broker capacity), or the same processes without Docker:
+Any N x M, or the same processes without Docker:
 
-    python -m src.cli up --sources 12 --brokers 4 --load 0.5 --seed 7
+    python -m src.cli up --sources 12 --brokers 4 --rho-server 0.5 --beta 4 --seed 7
     python -m src.cli up --backend local
+
+Generated instances keep the paper's structure: its four message classes
+and five subscription patterns are tiled over the sources (two of every five
+carry the 2 MB class), its three server capacities are tiled and scaled so
+the aggregate server utilization is `--rho-server`, and the access links are
+drawn from its range and scaled until the access/server balance at the
+optimum, C_ij/C_j flow-weighted over used routes, is `--beta` (the paper's
+instance sits at 4.0; without `--beta` the links stay in the paper's range).
+The seed only draws the links. Hitting `--beta` means solving the optimum a
+few times: seconds up to 50x10, about half a minute at 100x20, a few minutes
+at 200x30. Strongly server-dominated instances at high load (β below about
+1 at 70% server utilization, anything at 90%) can defeat the solver, which
+then stops with an error instead of a wrong β.
 
 Other options: `--window` (seconds between rounds, default 5), `--duration`,
 `--no-dashboard`, `--dashboard-port`, `--output-dir`, `--eta`, `--gamma`,
@@ -76,7 +88,7 @@ Single process:
 
     python -m src.cli run --config config/paper_5x3.yaml
     python -m src.cli run --config config/paper_5x3.yaml --controller static_algorithm1 --window 1 --duration 100 --no-realtime
-    python -m src.cli run --sources 10 --brokers 5 --load 0.5 --controller capacity_safe_event_driven
+    python -m src.cli run --sources 10 --brokers 5 --rho-server 0.5 --beta 4 --controller capacity_safe_event_driven
 
 The first is the notebook's windowed experiment. The second reproduces the
 notebook's Algorithm 1 run: 70 iterations to tolerance, F = 2.0157473649,
@@ -126,7 +138,7 @@ percentiles), and `run.json` (config, seed, parameters, git commit).
 
 ## Layout
 
-    src/model        topology, config, marginal costs, generator, symmetric oracle, capacity dynamics
+    src/model        topology, config, marginal costs, instance generator, symmetric oracle, capacity dynamics
     src/controller   Algorithm 1 (synchronous.py), best response, LP initializer, central solver, diagnostics
     src/simulation   event engine, queues, handler for the two event modes
     src/distributed  protocol, controller/source/broker processes, launcher

@@ -101,7 +101,7 @@ override.
 ## Running
 
     python -m src.cli up                                   # paper 5x3, Docker
-    python -m src.cli up --sources 12 --brokers 4 --load 0.5 --seed 7
+    python -m src.cli up --sources 12 --brokers 4 --rho-server 0.5 --beta 4 --seed 7
     python -m src.cli up --backend local
     python -m scripts.verify_distributed_run runs/distributed
 
