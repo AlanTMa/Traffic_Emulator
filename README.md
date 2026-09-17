@@ -145,10 +145,11 @@ percentiles), and `run.json` (config, seed, parameters, git commit).
     src/telemetry    record schema, JSONL writer and tail reader
     src/runtime      run metadata, experiment runners
     src/dashboard    Streamlit app
-    scripts          sweep_5x3, compare_modes, verify_distributed_run, replicate_paper
+    scripts          sweep_5x3, compare_modes, verify_distributed_run, replicate_paper, azure_trace
     tests            unit, integration, regression (5x3 baseline from the notebook)
     docs             reference_mapping (paper / notebook / code), plot_mapping (notebook plots /
-                     dashboard views), paper_replication, distributed, symmetric_case
+                     dashboard views), paper_replication, distributed, symmetric_case,
+                     azure_trace_assessment
 
 ## Tests
 
@@ -174,7 +175,9 @@ emulator with the dashboard.
 ## Not done
 
 Asynchronous updates (the paper leaves them open), dynamic capacities in the
-distributed processes, worker restarts, Kubernetes.
+distributed processes, worker restarts, Kubernetes, trace-driven arrivals
+([docs/azure_trace_assessment.md](docs/azure_trace_assessment.md) sizes up
+the Azure Functions trace for that).
 
 ## License
 
