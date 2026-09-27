@@ -74,9 +74,12 @@ optimum, C_ij/C_j flow-weighted over used routes, is `--beta` (the paper's
 instance sits at 4.0; without `--beta` the links stay in the paper's range).
 The seed only draws the links. Hitting `--beta` means solving the optimum a
 few times: seconds up to 50x10, about half a minute at 100x20, a few minutes
-at 200x30. Strongly server-dominated instances at high load (β below about
-1 at 70% server utilization, anything at 90%) can defeat the solver, which
-then stops with an error instead of a wrong β.
+at 200x30. Above 100 routes the optimum comes from a fixed-point solver,
+with SLSQP as a fallback up to 600 routes that can add half a minute. Up to
+600 routes every instance tried at up to 70% server utilization works. At
+90%, or above 600 routes with a server-dominated β, the solvers or the
+search for β can fail, and the generator then stops with an error rather
+than return a wrong β.
 
 Other options: `--window` (seconds between rounds, default 5), `--duration`,
 `--no-dashboard`, `--dashboard-port`, `--output-dir`, `--eta`, `--gamma`,

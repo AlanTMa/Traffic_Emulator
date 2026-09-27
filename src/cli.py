@@ -238,7 +238,7 @@ def main():
             run = launcher.prepare_run(config, args.sources, args.brokers, args.rho_server, args.seed, args.output_dir,
                                        args.window, {"eta": args.eta, "gamma": args.gamma, "delta_s": args.delta_s},
                                        beta=args.beta)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             parser.error(str(e))
         launcher.describe(run)
         if args.backend == "local":
@@ -260,7 +260,7 @@ def main():
                     if controller_mode(config) != controller_mode(base):
                         print(f"controller {controller_mode(config)}, config is for {controller_mode(base)}; "
                               f"parameters {config['algorithm']}")
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             parser.error(str(e))
         if written:
             out = Path(args.output_dir)

@@ -35,6 +35,16 @@ def test_beta_is_hit(beta):
     assert measured_beta(optimal_routing(topo), topo) == pytest.approx(beta, rel=0.01)
     assert topo.lambdas_total.sum() / topo.mu_brokers.sum() == pytest.approx(0.3, rel=1e-12)
 
+@pytest.mark.parametrize("rho, beta", [(0.5, 0.5), (0.7, 2.0)])
+def test_fixed_point_failure_falls_back_to_slsqp(rho, beta):
+    # 160 routes; on both, the fixed-point solver used above 100 routes found no certified point
+    topology, stats = generate_instance(20, 8, rho, beta=beta, seed=42)
+    assert stats["beta"] == pytest.approx(beta, rel=0.01)
+
+def test_unreached_beta_is_an_error():
+    with pytest.raises(RuntimeError, match="not reached"):
+        generate_instance(5, 3, 0.13, beta=4.0, seed=42, beta_tol=0.0)      # never within tolerance
+
 def test_infeasible_request_is_rejected():
     with pytest.raises(ValueError, match="infeasible"):
         generate_topology_config(5, 3, 0.13, beta=20.0, seed=42)     # links too tight for the 30 MB/s sources

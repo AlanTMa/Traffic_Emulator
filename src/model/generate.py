@@ -24,7 +24,8 @@ CLASSES = {"t1": (50, 2 / 1024), "t2": (30, 2 / 1024), "t3": (15, 2.0), "t4": (1
 SUBSCRIPTIONS = (("t1", "t2"), ("t1",), ("t2", "t3"), ("t3", "t4"), ("t1", "t4"))     # P0..P4
 PAPER_SERVERS = (160.75448519014384, 106.50515929852796, 196.56320330745592)         # SN1..SN3
 LINK_CAP_RANGE = (40.0, 60.0)
-SLSQP_MAX_ROUTES = 100
+SLSQP_MAX_ROUTES = 100             # SLSQP first up to here
+SLSQP_FALLBACK_ROUTES = 600        # and when the fixed point fails, up to here, where it is still practical
 
 def source_rates(n_sources: int) -> np.ndarray:
     """MB/s of the first n patterns, tiled."""
@@ -38,11 +39,21 @@ def optimal_routing(topo, start: np.ndarray = None) -> np.ndarray:
     Levenberg-Marquardt on log p with the batched best response; loads are
     capped just below capacity inside C_j so the map stays finite where a best
     response overloads a server. Heavily loaded instances are reached by
-    continuation from lower server load. `start` is a routing whose loads give
-    the starting prices. RuntimeError if no certified optimum is found.
+    continuation from lower server load. Where that finds no certified point,
+    SLSQP up to SLSQP_FALLBACK_ROUTES; the optimum is unique, so both give the
+    same routing. `start` is a routing whose loads give the starting prices.
+    RuntimeError if no certified optimum is found.
     """
+    failed = f"no certified optimum found for the {topo.n_sources}x{topo.n_brokers} instance"
+
+    def central():
+        try:
+            return np.asarray(solve_central(topo.lambdas_total, topo.mu_links, topo.mu_brokers)[0])
+        except RuntimeError as e:
+            raise RuntimeError(f"{failed}: {e}") from None
+
     if topo.mu_links.size <= SLSQP_MAX_ROUTES:
-        return np.asarray(solve_central(topo.lambdas_total, topo.mu_links, topo.mu_brokers)[0])
+        return central()
     mu_l, lam = topo.mu_links, topo.lambdas_total
 
     def solve(mu_s, prices):
@@ -71,7 +82,9 @@ def optimal_routing(topo, start: np.ndarray = None) -> np.ndarray:
             break
     if certified:
         return routing
-    raise RuntimeError(f"no certified optimum found for the {topo.n_sources}x{topo.n_brokers} instance")
+    if topo.mu_links.size <= SLSQP_FALLBACK_ROUTES:
+        return central()
+    raise RuntimeError(failed)
 
 def measured_beta(lambda_ij: np.ndarray, topo) -> float:
     """C_ij / C_j, flow-weighted over used routes."""
@@ -84,7 +97,8 @@ def generate_instance(n_sources: int, n_brokers: int, rho_server: float = 0.3, b
                       seed: int = 42, beta_tol: float = 0.01) -> tuple:
     """
     (topology section, stats). stats has rho_server, and with beta the measured
-    value and the rounds the adjust loop took. ValueError if no routing fits.
+    value and the rounds the adjust loop took. ValueError if no routing fits,
+    RuntimeError if the optimum or beta cannot be reached.
     """
     if not 0 < rho_server < 1:
         raise ValueError("rho_server must be in (0, 1)")
@@ -142,14 +156,15 @@ def generate_instance(n_sources: int, n_brokers: int, rho_server: float = 0.3, b
         got = measured_beta(routing, topo)
         stats.update(beta=got, beta_rounds=rounds)
         if abs(got / beta - 1) <= beta_tol:
-            break
+            return topology, stats
         history.append((np.log(scale), np.log(got)))
         slope = -1.0
         if len(history) > 1 and history[-1][0] != history[-2][0]:
             slope = float(np.clip((history[-1][1] - history[-2][1]) / (history[-1][0] - history[-2][0]), -3.0, -0.5))
         step = float(np.clip((np.log(beta) - history[-1][1]) / slope, -np.log(4.0), np.log(4.0)))
         scale = float(np.exp(history[-1][0] + step))
-    return topology, stats
+    raise RuntimeError(f"beta {beta:g} not reached for {n_sources}x{n_brokers} at rho_server {rho_server:.2f} "
+                       f"in {rounds} rounds (last measured {stats['beta']:.3g})")
 
 def generate_topology_config(n_sources: int, n_brokers: int, rho_server: float = 0.3, beta: float = None,
                              seed: int = 42, beta_tol: float = 0.01) -> dict:
