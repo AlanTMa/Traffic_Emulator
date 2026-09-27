@@ -138,6 +138,11 @@ from 1.7 ms to 128 s, and within the five busiest apps the CV is 2.2 to
 
 ![durations](figures/azure_durations.png)
 
+Left, the histogram on log bins: the trace spreads over six decades with a
+spike at the 1 ms floor, where an exponential with the same mean puts 97%
+of its mass between 0.1 s and 20 s. Right, the tail: the exponential is
+below 1e-7 by 60 s, and the trace still has 1.5% of its invocations there.
+
 Using them as service times would turn the brokers into M/G/1 queues
 with app-dependent service; by Pollaczek-Khinchine the mean queueing
 delay at a given utilization would be (1 + CV²)/2 = 14 times the M/M/1
