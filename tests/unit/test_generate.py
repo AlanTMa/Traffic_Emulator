@@ -43,7 +43,7 @@ def test_fixed_point_failure_falls_back_to_slsqp(rho, beta):
 
 def test_unreached_beta_is_an_error():
     with pytest.raises(RuntimeError, match="not reached"):
-        generate_instance(5, 3, 0.13, beta=4.0, seed=42, beta_tol=0.0)      # never within tolerance
+        generate_instance(5, 3, 0.13, beta=4.0, seed=42, beta_tol=-1.0)     # a negative tolerance is never met
 
 def test_infeasible_request_is_rejected():
     with pytest.raises(ValueError, match="infeasible"):
