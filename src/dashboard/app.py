@@ -120,7 +120,7 @@ else:
             n_sources = st.slider("Sources", 1, 20, 5)
             n_brokers = st.slider("Brokers", 1, 10, 3)
             rho_server = st.slider("Server utilization", 0.05, 0.95, 0.30, 0.05, help="offered rate / total server capacity")
-            beta = st.number_input("beta (access/server balance)", 0.0, 100.0, 0.0, 0.5,
+            balance = st.number_input("beta (access/server balance)", 0.0, 100.0, 0.0, 0.5,
                                    help="C_ij/C_j at the optimum; paper 4.0; 0 = links from the paper's range")
             seed = st.number_input("Seed", min_value=0, value=42, step=1)
             mode = st.selectbox("Controller mode", list(MODE_HELP), format_func=lambda m: MODE_HELP[m][0],
@@ -161,15 +161,15 @@ else:
                         algorithm = {"eta": eta, "gamma": gamma, "beta": beta}
                     config = {"simulation": simulation, "algorithm": algorithm,
                               "topology": generate_topology_config(n_sources, n_brokers, rho_server,
-                                                                   beta or None, int(seed))}
+                                                                   balance or None, int(seed))}
                     label = f"Generated {n_sources}×{n_brokers}, rho_server {rho_server:.2f}" \
-                            + (f", beta {beta:g}" if beta else "") + f", seed {seed}"
+                            + (f", beta {balance:g}" if balance else "") + f", seed {seed}"
                 else:
                     config = with_controller_mode(load_config(config_file), file_mode)
                     label = f"{config_file.name} ({MODE_HELP[file_mode][0]})"
                 launch_simulation(holder, config, label)
                 st.rerun()
-            except ValueError as e:
+            except (ValueError, RuntimeError) as e:
                 st.error(str(e))
         if stop_col.button("Stop", width="stretch", disabled=not is_running(holder)):
             stop_simulation(holder)
